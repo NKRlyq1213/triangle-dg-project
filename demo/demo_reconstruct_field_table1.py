@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import matplotlib.pyplot as plt
 import numpy as np
+from pathlib import Path
 
 from data.table1_rules import load_table1_rule
 from geometry.reference_triangle import reference_triangle_vertices, reference_triangle_area
@@ -21,13 +22,16 @@ def xy_to_rs(xy: np.ndarray) -> np.ndarray:
 
 
 def main() -> None:
+    output_dir = Path(r"C:\Users\user\Desktop\triangle_dg_project\photo")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
     vertices = reference_triangle_vertices()
     area = reference_triangle_area()
 
     table_order = 4
     N = 4
     resolution = 50
-    case_name = "smooth_bump"
+    case_name = "poly2"
 
     rule = load_table1_rule(table_order)
 
@@ -54,7 +58,7 @@ def main() -> None:
         levels=25,
         show_nodes=True,
     )
-    fig.savefig("reconstruct_field_table1_order4_N4.png", dpi=200, bbox_inches="tight")
+    fig.savefig(output_dir / "reconstruct_field_table1_order4_N4.png", dpi=200, bbox_inches="tight")
     plt.close(fig)
 
 

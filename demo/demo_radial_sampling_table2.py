@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import matplotlib.pyplot as plt
 import numpy as np
+from pathlib import Path
 
 from data.table2_rules import load_table2_rule
 from geometry.reference_triangle import reference_triangle_vertices, reference_triangle_area
@@ -21,12 +22,15 @@ def xy_to_rs(xy: np.ndarray) -> np.ndarray:
 
 
 def main() -> None:
+    output_dir = Path(r"C:\Users\user\Desktop\triangle_dg_project\photo")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
     vertices = reference_triangle_vertices()
     area = reference_triangle_area()
 
     table_order = 4
     N = 4
-    case_name = "smooth_bump"
+    case_name = "poly2"
 
     rule = load_table2_rule(table_order)
 
@@ -56,7 +60,7 @@ def main() -> None:
         nodes=xy_nodes,
         title=f"Radial field: Table 2 order {table_order}, N={N}, case={case_name}",
     )
-    fig1.savefig("radial_field_table2_order4_N4.png", dpi=200, bbox_inches="tight")
+    fig1.savefig(output_dir / "radial_field_table2_order4_N4.png", dpi=200, bbox_inches="tight")
     plt.close(fig1)
 
     fig2, ax2 = plot_radial_profile(
@@ -66,7 +70,7 @@ def main() -> None:
         n_curves_to_show=8,
         title=f"Radial profiles: Table 2 order {table_order}, N={N}, case={case_name}",
     )
-    fig2.savefig("radial_profile_table2_order4_N4.png", dpi=200, bbox_inches="tight")
+    fig2.savefig(output_dir / "radial_profile_table2_order4_N4.png", dpi=200, bbox_inches="tight")
     plt.close(fig2)
 
 
