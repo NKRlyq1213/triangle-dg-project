@@ -31,7 +31,7 @@ def main() -> None:
     table_order = 4
     N = 4
     resolution = 60
-    case_name = "poly2"
+    case_name = "smooth_bump"
 
     rule = load_table2_rule(table_order)
 
