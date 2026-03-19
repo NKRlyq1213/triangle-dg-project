@@ -82,6 +82,17 @@ def main() -> None:
     fig.savefig(output_dir / "evaluated_field_table1_order4_N4.png", dpi=200, bbox_inches="tight")
     plt.close(fig)
 
+    fig, ax = plot_triangle_field(
+        xy_eval=xy_eval,
+        u_eval=u_exact,
+        vertices=vertices,
+        nodes=xy_eval,
+        title=f"Exact field: Table 1 order {table_order}, N={N}, case={case_name}",
+        levels=25,
+        show_nodes=True,
+    )
+    fig.savefig(output_dir / "exact_field_table1_order4_N4.png", dpi=200, bbox_inches="tight")
+    plt.close(fig)
     print("--- dense grid error ---")
     print("max abs error =", np.max(np.abs(err)))
     print("l2-like rms error =", np.sqrt(np.mean(err**2)))
