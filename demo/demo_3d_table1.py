@@ -22,7 +22,7 @@ def xy_to_rs(xy: np.ndarray) -> np.ndarray:
 
 
 def main() -> None:
-    output_dir = Path(r"C:\Users\user\Desktop\triangle_dg_project\photo")
+    output_dir = Path(r"C:\Users\user\Desktop\triangle-dg-project\photo")
     output_dir.mkdir(parents=True, exist_ok=True)
     vertices = reference_triangle_vertices()
     area = reference_triangle_area()
@@ -46,7 +46,14 @@ def main() -> None:
     coeffs = fit_modal_coefficients_weighted(u_nodes, V, w, area=area)
 
     # dense evaluation points
-    xy_eval = dense_barycentric_lattice(vertices, resolution=resolution)
+    from geometry.display_points import build_display_points
+
+    xy_eval = build_display_points(
+        table_name="table1",
+        rule=rule,
+        add_vertices=True,
+        add_edge_points=False,
+        edge_n=5)
     rs_eval = xy_to_rs(xy_eval)
     V_eval = vandermonde2d(N, rs_eval[:, 0], rs_eval[:, 1])
 
@@ -60,7 +67,7 @@ def main() -> None:
         xy_eval=xy_eval,
         z_eval=u_eval,
         vertices=vertices,
-        nodes=xy_nodes,
+        nodes=xy_eval,
         title=f"3D reconstructed field: Table 1 order {table_order}, N={N}, case={case_name}",
         zlabel="u_recon",
     )

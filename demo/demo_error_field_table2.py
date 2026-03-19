@@ -22,7 +22,7 @@ def xy_to_rs(xy: np.ndarray) -> np.ndarray:
 
 
 def main() -> None:
-    output_dir = Path(r"C:\Users\user\Desktop\triangle_dg_project\photo")
+    output_dir = Path(r"C:\Users\user\Desktop\triangle-dg-project\photo")
     output_dir.mkdir(parents=True, exist_ok=True)
 
     vertices = reference_triangle_vertices()
@@ -43,8 +43,14 @@ def main() -> None:
 
     V = vandermonde2d(N, rs_nodes[:, 0], rs_nodes[:, 1])
     coeffs = fit_modal_coefficients_weighted(u_nodes, V, w, area=area)
-
-    xy_eval = dense_barycentric_lattice(vertices, resolution=resolution)
+    from geometry.display_points import build_display_points
+    xy_eval = build_display_points(
+        table_name="table2",
+        rule=rule,
+        add_vertices=True,
+        add_edge_points=True,
+        edge_n=table_order + 1
+    )
     rs_eval = xy_to_rs(xy_eval)
     V_eval = vandermonde2d(N, rs_eval[:, 0], rs_eval[:, 1])
     u_eval = evaluate_modal_expansion(V_eval, coeffs)
@@ -56,12 +62,24 @@ def main() -> None:
         xy_eval=xy_eval,
         u_eval=err,
         vertices=vertices,
-        nodes=xy_nodes,
+        nodes=xy_eval,
         title=f"Error field: Table 2 order {table_order}, N={N}, case={case_name}",
         levels=25,
         show_nodes=True,
     )
     fig.savefig(output_dir / "error_field_table2_order4_N4.png", dpi=200, bbox_inches="tight")
+    plt.close(fig)
+
+    fig, ax = plot_triangle_field(
+        xy_eval=xy_eval,
+        u_eval=u_eval,
+        vertices=vertices,
+        nodes=xy_eval,
+        title=f"Evaluated field: Table 2 order {table_order}, N={N}, case={case_name}",
+        levels=25,
+        show_nodes=True,
+    )
+    fig.savefig(output_dir / "evaluated_field_table2_order4_N4.png", dpi=200, bbox_inches="tight")
     plt.close(fig)
 
     print("--- dense grid error ---")
