@@ -81,7 +81,14 @@ def fit_modal_coefficients_weighted(
         raise ValueError("Size mismatch between V and weights.")
 
     M = mass_matrix_from_quadrature(V, weights, area=area)
-    rhs = area * (V.T @ (weights * u_nodes))
+
+    print(M.shape)
+    rhs = area * (V.T @ (weights * u_nodes)) # = M a
+    weights = np.diag(weights)
+    print(rhs.shape)
+    print(V.shape)
+    print(area * V @ np.linalg.inv(M) @ (V.T @ (weights)))
+    print(np.linalg.matrix_rank(area * V @ np.linalg.solve(M, V.T @ weights)))
     return np.linalg.solve(M, rhs)
 
 

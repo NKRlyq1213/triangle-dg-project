@@ -26,12 +26,16 @@ def ground_truth_function(case_name: str, x, y, **params) -> np.ndarray:
             - 0.4 * y
             + 0.6 * x * y
             + 0.3 * x**2
+            - 0.2 * y**2
+            + 0.1 * x**2 * y
+            - 0.05 * x * y**2
+            + 0.02 * x**2 * y**2
         )
 
     if case == "smooth_bump":
-        x0 = params.get("x0", 0.35)
-        y0 = params.get("y0", 0.30)
-        sigma = params.get("sigma", 0.12)
+        x0 = params.get("x0", 1/3)
+        y0 = params.get("y0", 1/3)
+        sigma = params.get("sigma", np.sqrt(1/30))
         return np.exp(-((x - x0)**2 + (y - y0)**2) / (2.0 * sigma**2))
 
     if case == "trig":

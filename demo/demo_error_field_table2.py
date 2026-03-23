@@ -43,6 +43,9 @@ def main() -> None:
 
     V = vandermonde2d(N, rs_nodes[:, 0], rs_nodes[:, 1])
     coeffs = fit_modal_coefficients_weighted(u_nodes, V, w, area=area)
+    print(V @ coeffs)
+    print(u_nodes)
+    
     from geometry.display_points import build_display_points
     xy_eval = build_display_points(
         table_name="table2",

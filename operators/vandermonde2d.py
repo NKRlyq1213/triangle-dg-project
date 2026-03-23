@@ -39,7 +39,7 @@ def vandermonde2d(N: int, r, s) -> np.ndarray:
 
     for k, (i, j) in enumerate(mode_indices_2d(N)):
         V[:, k] = simplex2d_mode(i, j, r, s)
-
+    print(V.shape)
     return V
 
 
