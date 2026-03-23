@@ -12,15 +12,6 @@ from operators.reconstruction import fit_modal_coefficients_weighted, evaluate_m
 from problems.analytic_fields import ground_truth_function
 from visualization.surface3d import plot_triangle_surface3d
 
-
-def xy_to_rs(xy: np.ndarray) -> np.ndarray:
-    xy = np.asarray(xy, dtype=float)
-    rs = np.empty_like(xy)
-    rs[:, 0] = 2.0 * xy[:, 0] - 1.0
-    rs[:, 1] = 2.0 * xy[:, 1] - 1.0
-    return rs
-
-
 def main() -> None:
     output_dir = Path(r"C:\Users\user\Desktop\triangle-dg-project\photo")
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -33,13 +24,11 @@ def main() -> None:
     case_name = "smooth_bump"
 
     rule = load_table2_rule(table_order)
-
-    xy_nodes = rule["xy"]
     rs_nodes = rule["rs"]
     w = rule["ws"]
 
     # nodal values from analytic field
-    u_nodes = ground_truth_function(case_name, xy_nodes[:, 0], xy_nodes[:, 1])
+    u_nodes = ground_truth_function(case_name, rs_nodes[:, 0], rs_nodes[:, 1])
 
     # weighted reconstruction on volume nodes
     V = vandermonde2d(N, rs_nodes[:, 0], rs_nodes[:, 1])
@@ -48,27 +37,26 @@ def main() -> None:
     # dense evaluation points
     from geometry.display_points import build_display_points
 
-    xy_eval = build_display_points(
+    rs_eval = build_display_points(
         table_name="table2",
         rule=rule,
         add_vertices=True,
         add_edge_points=True,
         edge_n=table_order + 1
     )
-    rs_eval = xy_to_rs(xy_eval)
     V_eval = vandermonde2d(N, rs_eval[:, 0], rs_eval[:, 1])
 
     # reconstructed field and exact field
     u_eval = evaluate_modal_expansion(V_eval, coeffs)
-    u_exact = ground_truth_function(case_name, xy_eval[:, 0], xy_eval[:, 1])
+    u_exact = ground_truth_function(case_name, rs_eval[:, 0], rs_eval[:, 1])
     err = u_eval - u_exact
 
     # 3D reconstructed field
     fig1, ax1 = plot_triangle_surface3d(
-        xy_eval=xy_eval,
+        rs_eval=rs_eval,
         z_eval=u_eval,
         vertices=vertices,
-        nodes=xy_eval,
+        nodes=rs_eval,
         title=f"3D reconstructed field: Table 2 order {table_order}, N={N}, case={case_name}",
         zlabel="u_recon",
     )
@@ -77,10 +65,10 @@ def main() -> None:
 
     # 3D error field
     fig2, ax2 = plot_triangle_surface3d(
-        xy_eval=xy_eval,
+        rs_eval=rs_eval,
         z_eval=err,
         vertices=vertices,
-        nodes=xy_nodes,
+        nodes=rs_eval,
         title=f"3D error field: Table 2 order {table_order}, N={N}, case={case_name}",
         zlabel="u_recon - u_exact",
     )

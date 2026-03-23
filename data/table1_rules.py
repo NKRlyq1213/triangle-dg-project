@@ -3,8 +3,7 @@ from __future__ import annotations
 import itertools
 import numpy as np
 
-from geometry.reference_triangle import reference_triangle_vertices
-from geometry.barycentric import barycentric_to_cartesian
+from geometry.barycentric import raw_barycentric_to_reference_rs
 
 
 TABLE1_RAW: dict[int, list[dict[str, float | str | None]]] = {
@@ -58,18 +57,16 @@ def _expand_row(sym: str, b1: float, b2: float) -> np.ndarray:
     return bary
 
 
-def _rule_to_xy_rs(bary: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    verts = reference_triangle_vertices()
-    xy = barycentric_to_cartesian(bary, verts)
-
-    # (xi, eta) -> (r, s)
-    rs = np.empty_like(xy)
-    rs[:, 0] = 2.0 * xy[:, 0] - 1.0
-    rs[:, 1] = 2.0 * xy[:, 1] - 1.0
-    return xy, rs
-
-
 def load_table1_rule(order: int) -> dict:
+    """
+    Load Table 1 quadrature data and return points directly in the NEW
+    reference triangle coordinates (r, s).
+
+    Notes
+    -----
+    - 'bary' is kept in the raw literature convention.
+    - 'rs' is the actual point set used by the code base.
+    """
     if order not in TABLE1_RAW:
         raise KeyError(f"Order {order} is not available in TABLE1_RAW.")
 
@@ -92,7 +89,7 @@ def load_table1_rule(order: int) -> dict:
     bary = np.vstack(bary_all)
     ws = np.concatenate(ws_all)
     we = np.concatenate(we_all)
-    xy, rs = _rule_to_xy_rs(bary)
+    rs = raw_barycentric_to_reference_rs(bary)
 
     edge_mask = ~np.isnan(we)
 
@@ -100,7 +97,6 @@ def load_table1_rule(order: int) -> dict:
         "table": "table1",
         "order": order,
         "bary": bary,
-        "xy": xy,
         "rs": rs,
         "ws": ws,
         "we": we,

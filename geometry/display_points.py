@@ -22,7 +22,7 @@ def build_display_points(
     edge_n: int = 5,
 ) -> np.ndarray:
     """
-    Build display/evaluation points for plotting.
+    Build display/evaluation points for plotting in the NEW reference triangle (r, s).
 
     Rules
     -----
@@ -31,27 +31,9 @@ def build_display_points(
 
     Table 2:
         display points = table nodes + vertices + GL1D edge points
-
-    Parameters
-    ----------
-    table_name : str
-        "table1" or "table2"
-    rule : dict
-        Rule dictionary from load_table1_rule / load_table2_rule
-    add_vertices : bool
-        Whether to add the 3 triangle vertices
-    add_edge_points : bool
-        Whether to add GL1D edge points (used mainly for table2)
-    edge_n : int
-        Number of GL1D points per edge
-
-    Returns
-    -------
-    np.ndarray
-        Display points in (xi, eta), shape (n_points, 2)
     """
     table_name = table_name.lower().strip()
-    pts = [np.asarray(rule["xy"], dtype=float)]
+    pts = [np.asarray(rule["rs"], dtype=float)]
 
     if add_vertices:
         verts = reference_triangle_vertices()
@@ -60,7 +42,7 @@ def build_display_points(
     if table_name == "table2" and add_edge_points:
         edge_rules = all_edge_gl1d_rules(edge_n)
         for edge_id in [1, 2, 3]:
-            pts.append(edge_rules[edge_id].xy)
+            pts.append(edge_rules[edge_id].rs)
 
     all_pts = np.vstack(pts)
     return _unique_rows(all_pts)

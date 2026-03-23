@@ -82,13 +82,13 @@ def fit_modal_coefficients_weighted(
 
     M = mass_matrix_from_quadrature(V, weights, area=area)
 
-    print(M.shape)
+    #print("M.shape:", M.shape)
     rhs = area * (V.T @ (weights * u_nodes)) # = M a
     weights = np.diag(weights)
-    print(rhs.shape)
-    print(V.shape)
-    print(area * V @ np.linalg.inv(M) @ (V.T @ (weights)))
-    print(np.linalg.matrix_rank(area * V @ np.linalg.solve(M, V.T @ weights)))
+    #print("rhs.shape:", rhs.shape)
+    #print("V.shape:", V.shape)
+    #print("area * V @ np.linalg.inv(M) @ (V.T @ (weights)):", area * V @ np.linalg.inv(M) @ (V.T @ (weights)))
+    #print("np.linalg.matrix_rank(area * V @ np.linalg.solve(M, V.T @ weights)):", np.linalg.matrix_rank(area * V @ np.linalg.solve(M, V.T @ weights)))
     return np.linalg.solve(M, rhs)
 
 

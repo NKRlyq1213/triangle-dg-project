@@ -4,8 +4,17 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 
+def _axis_limits_from_vertices(vertices: np.ndarray, pad_ratio: float = 0.06) -> tuple[tuple[float, float], tuple[float, float]]:
+    vertices = np.asarray(vertices, dtype=float)
+    mins = vertices.min(axis=0)
+    maxs = vertices.max(axis=0)
+    span = np.maximum(maxs - mins, 1e-14)
+    pad = pad_ratio * span
+    return (mins[0] - pad[0], maxs[0] + pad[0]), (mins[1] - pad[1], maxs[1] + pad[1])
+
+
 def plot_radial_field(
-    xy_eval: np.ndarray,
+    rs_eval: np.ndarray,
     u_eval: np.ndarray,
     vertices: np.ndarray,
     nodes: np.ndarray | None = None,
@@ -13,9 +22,9 @@ def plot_radial_field(
     ax=None,
 ):
     """
-    Scatter-style visualization for centroid-based star sampling.
+    Scatter-style visualization for centroid-based star sampling in (r, s).
     """
-    xy_eval = np.asarray(xy_eval, dtype=float)
+    rs_eval = np.asarray(rs_eval, dtype=float)
     u_eval = np.asarray(u_eval, dtype=float).reshape(-1)
 
     if ax is None:
@@ -23,7 +32,7 @@ def plot_radial_field(
     else:
         fig = ax.figure
 
-    sc = ax.scatter(xy_eval[:, 0], xy_eval[:, 1], c=u_eval, s=12)
+    sc = ax.scatter(rs_eval[:, 0], rs_eval[:, 1], c=u_eval, s=12)
     fig.colorbar(sc, ax=ax)
 
     tri = np.vstack([vertices, vertices[0]])
@@ -33,11 +42,13 @@ def plot_radial_field(
         nodes = np.asarray(nodes, dtype=float)
         ax.scatter(nodes[:, 0], nodes[:, 1], s=14, marker="o", alpha=0.8)
 
+    xlim, ylim = _axis_limits_from_vertices(vertices)
+
     ax.set_aspect("equal")
-    ax.set_xlabel("xi")
-    ax.set_ylabel("eta")
-    ax.set_xlim(-0.05, 1.05)
-    ax.set_ylim(-0.05, 1.05)
+    ax.set_xlabel("r")
+    ax.set_ylabel("s")
+    ax.set_xlim(*xlim)
+    ax.set_ylim(*ylim)
     ax.grid(True, alpha=0.2)
 
     if title is not None:

@@ -7,33 +7,12 @@ from operators.mass import mass_matrix_from_quadrature
 from operators.vandermonde2d import vandermonde2d
 
 
-def xy_to_rs(xy: np.ndarray) -> np.ndarray:
-    """
-    Convert reference-triangle Cartesian coordinates (xi, eta) to (r, s).
-
-    Reference triangle:
-        (xi, eta) in {(0,1), (0,0), (1,0)}
-
-    Mapping:
-        r = 2*xi - 1
-        s = 2*eta - 1
-    """
-    xy = np.asarray(xy, dtype=float)
-    if xy.ndim != 2 or xy.shape[1] != 2:
-        raise ValueError("xy must have shape (n_points, 2).")
-
-    rs = np.empty_like(xy)
-    rs[:, 0] = 2.0 * xy[:, 0] - 1.0
-    rs[:, 1] = 2.0 * xy[:, 1] - 1.0
-    return rs
-
-
 def edge_nodes_rs(edge_id: int, n_edge: int) -> np.ndarray:
     """
-    Return GL1D edge nodes mapped onto the reference triangle, in (r,s).
+    Return GL1D edge nodes directly on the reference triangle, in (r, s).
     """
     rule = edge_gl1d_rule(edge_id=edge_id, n=n_edge)
-    return xy_to_rs(rule.xy)
+    return rule.rs
 
 
 def edge_vandermonde2d(
@@ -42,7 +21,7 @@ def edge_vandermonde2d(
     n_edge: int,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
-    Build the edge evaluation Vandermonde matrix on GL1D nodes.
+    Build the edge evaluation Vandermonde matrix on GL1D edge nodes.
 
     Returns
     -------
@@ -66,22 +45,6 @@ def volume_to_edge_operator(
     Build the volume-to-edge trace/evaluation operator:
 
         E = V_edge (A V^T W V)^(-1) (A V^T W)
-
-    Parameters
-    ----------
-    V_vol : np.ndarray
-        Volume Vandermonde matrix of shape (n_vol, n_modes).
-    weights : np.ndarray
-        Volume quadrature weights of shape (n_vol,).
-    V_edge : np.ndarray
-        Edge evaluation Vandermonde matrix of shape (n_edge, n_modes).
-    area : float
-        Geometric area factor.
-
-    Returns
-    -------
-    np.ndarray
-        Trace operator E of shape (n_edge, n_vol).
     """
     V_vol = np.asarray(V_vol, dtype=float)
     V_edge = np.asarray(V_edge, dtype=float)

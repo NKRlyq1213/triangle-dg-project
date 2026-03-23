@@ -9,8 +9,17 @@ def _triangle_closed(vertices: np.ndarray) -> np.ndarray:
     return np.vstack([vertices, vertices[0]])
 
 
+def _axis_limits_from_vertices(vertices: np.ndarray, pad_ratio: float = 0.06) -> tuple[tuple[float, float], tuple[float, float]]:
+    vertices = np.asarray(vertices, dtype=float)
+    mins = vertices.min(axis=0)
+    maxs = vertices.max(axis=0)
+    span = np.maximum(maxs - mins, 1e-14)
+    pad = pad_ratio * span
+    return (mins[0] - pad[0], maxs[0] + pad[0]), (mins[1] - pad[1], maxs[1] + pad[1])
+
+
 def plot_triangle_field(
-    xy_eval: np.ndarray,
+    rs_eval: np.ndarray,
     u_eval: np.ndarray,
     vertices: np.ndarray,
     nodes: np.ndarray | None = None,
@@ -20,45 +29,22 @@ def plot_triangle_field(
     ax=None,
 ):
     """
-    Plot a scalar field inside a triangle using tricontourf.
-
-    Parameters
-    ----------
-    xy_eval : np.ndarray
-        Evaluation points of shape (n_points, 2).
-    u_eval : np.ndarray
-        Scalar values at evaluation points of shape (n_points,).
-    vertices : np.ndarray
-        Triangle vertices of shape (3, 2).
-    nodes : np.ndarray | None
-        Optional nodal points to overlay, shape (n_nodes, 2).
-    title : str | None
-        Plot title.
-    levels : int
-        Number of contour levels.
-    show_nodes : bool
-        Whether to overlay nodal points.
-    ax : matplotlib axis | None
-        Existing axis if provided.
-
-    Returns
-    -------
-    tuple[fig, ax]
+    Plot a scalar field inside a triangle using tricontourf in (r, s).
     """
-    xy_eval = np.asarray(xy_eval, dtype=float)
+    rs_eval = np.asarray(rs_eval, dtype=float)
     u_eval = np.asarray(u_eval, dtype=float).reshape(-1)
 
-    if xy_eval.ndim != 2 or xy_eval.shape[1] != 2:
-        raise ValueError("xy_eval must have shape (n_points, 2).")
-    if xy_eval.shape[0] != u_eval.size:
-        raise ValueError("xy_eval and u_eval size mismatch.")
+    if rs_eval.ndim != 2 or rs_eval.shape[1] != 2:
+        raise ValueError("rs_eval must have shape (n_points, 2).")
+    if rs_eval.shape[0] != u_eval.size:
+        raise ValueError("rs_eval and u_eval size mismatch.")
 
     if ax is None:
         fig, ax = plt.subplots(figsize=(6.5, 6))
     else:
         fig = ax.figure
 
-    triang = mtri.Triangulation(xy_eval[:, 0], xy_eval[:, 1])
+    triang = mtri.Triangulation(rs_eval[:, 0], rs_eval[:, 1])
     contour = ax.tricontourf(triang, u_eval, levels=levels)
     fig.colorbar(contour, ax=ax)
 
@@ -69,11 +55,13 @@ def plot_triangle_field(
         nodes = np.asarray(nodes, dtype=float)
         ax.scatter(nodes[:, 0], nodes[:, 1], s=15, marker="o", alpha=0.8)
 
+    xlim, ylim = _axis_limits_from_vertices(vertices)
+
     ax.set_aspect("equal")
-    ax.set_xlabel("xi")
-    ax.set_ylabel("eta")
-    ax.set_xlim(-0.05, 1.05)
-    ax.set_ylim(-0.05, 1.05)
+    ax.set_xlabel("r")
+    ax.set_ylabel("s")
+    ax.set_xlim(*xlim)
+    ax.set_ylim(*ylim)
     ax.grid(True, alpha=0.2)
 
     if title is not None:

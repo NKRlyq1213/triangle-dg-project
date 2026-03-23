@@ -14,30 +14,20 @@ class EdgeRule:
     n_points: int
     t01: np.ndarray
     weights: np.ndarray
-    xy: np.ndarray
+    rs: np.ndarray
     length: float
 
 
 def gauss_legendre_1d(n: int) -> tuple[np.ndarray, np.ndarray]:
     """
     Return Gauss-Legendre nodes and normalized weights on [0, 1].
-
-    Parameters
-    ----------
-    n : int
-        Number of quadrature points.
-
-    Returns
-    -------
-    tuple[np.ndarray, np.ndarray]
-        (t01, w01), where t01 are nodes on [0,1] and w01 sum to 1.
     """
     if n <= 0:
         raise ValueError("n must be a positive integer.")
 
-    x, w = roots_legendre(n)     # nodes/weights on [-1,1]
-    t01 = 0.5 * (x + 1.0)        # map to [0,1]
-    w01 = 0.5 * w                # mapped weights, sum = 1
+    x, w = roots_legendre(n)   # nodes/weights on [-1,1]
+    t01 = 0.5 * (x + 1.0)      # map to [0,1]
+    w01 = 0.5 * w              # mapped weights, sum = 1
     return np.asarray(t01, dtype=float), np.asarray(w01, dtype=float)
 
 
@@ -47,7 +37,7 @@ def edge_gl1d_rule(
     vertices: np.ndarray | None = None,
 ) -> EdgeRule:
     """
-    Build a GL1D rule on one edge of the reference triangle.
+    Build a GL1D rule on one edge of the reference triangle in (r, s).
 
     Edge convention:
         edge 1: v2 -> v3
@@ -58,7 +48,7 @@ def edge_gl1d_rule(
         vertices = reference_triangle_vertices()
 
     t01, w01 = gauss_legendre_1d(n)
-    xy = edge_parameterization(edge_id, t01, vertices)
+    rs = edge_parameterization(edge_id, t01, vertices)
     L = edge_length(edge_id, vertices)
 
     return EdgeRule(
@@ -66,7 +56,7 @@ def edge_gl1d_rule(
         n_points=n,
         t01=t01,
         weights=w01,
-        xy=xy,
+        rs=rs,
         length=L,
     )
 
