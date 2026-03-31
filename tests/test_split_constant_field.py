@@ -46,7 +46,7 @@ def test_split_constant_field_is_zero():
     Dr, Ds = build_reference_diff_operators_from_rule(rule, N)
 
     # 8 triangles on [0,1]^2
-    VX, VY, EToV = structured_square_tri_mesh(nx=2, ny=2, diagonal="main")
+    VX, VY, EToV = structured_square_tri_mesh(nx=2, ny=2, diagonal="anti")
     X, Y = map_reference_nodes_to_all_elements(rs, VX, VY, EToV)
     g = affine_geometric_factors_from_mesh(VX, VY, EToV, rs)
 

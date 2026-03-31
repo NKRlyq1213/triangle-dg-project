@@ -22,7 +22,7 @@ def structured_square_tri_mesh(
     ny: int,
     xlim: tuple[float, float] = (0.0, 1.0),
     ylim: tuple[float, float] = (0.0, 1.0),
-    diagonal: str = "main",
+    diagonal: str = "anti",
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Build a structured triangular mesh on a rectangular domain.

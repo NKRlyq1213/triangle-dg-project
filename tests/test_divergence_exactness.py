@@ -46,7 +46,7 @@ def test_divergence_exactness_table2_order2_square():
     Dr, Ds = differentiation_matrices_square(V, Vr, Vs)
 
     # Build physical mesh: [0,1]^2 split into 8 triangles
-    VX, VY, EToV = structured_square_tri_mesh(nx=2, ny=2, diagonal="main")
+    VX, VY, EToV = structured_square_tri_mesh(nx=2, ny=2, diagonal="anti")
 
     # Map the same reference table nodes to all physical elements
     X, Y = map_reference_nodes_to_all_elements(rs, VX, VY, EToV)
