@@ -13,7 +13,7 @@ from problems.analytic_fields import ground_truth_function
 from visualization.triangle_field import plot_triangle_field
 
 def main() -> None:
-    output_dir = Path(r"C:\Users\user\Desktop\triangle-dg-project\photo")
+    output_dir = Path(__file__).resolve().parents[1] / "photo"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     vertices = reference_triangle_vertices()

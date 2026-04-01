@@ -137,7 +137,7 @@ def centroid_star_sampling(
     if n_theta < 3 or n_r < 2:
         raise ValueError("n_theta >= 3 and n_r >= 2 are required.")
 
-    c = reference_triangle_centroid()
+    c = np.mean(vertices, axis=0)
     thetas = np.linspace(0.0, 2.0 * np.pi, n_theta, endpoint=False)
 
     pts = []

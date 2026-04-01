@@ -85,8 +85,8 @@ def report_error(name: str, num: np.ndarray, exact: np.ndarray) -> None:
 
 
 def main() -> None:
-    outdir = Path("C:/Users/user/Desktop/triangle-dg-project/photo/differentiation_photo")
-    outdir.mkdir(parents=True, exist_ok=True)
+    output_dir = Path(__file__).resolve().parents[1] / "photo" / "differentiation_photo"
+    output_dir.mkdir(parents=True, exist_ok=True)
     #==================================================================
     #=====================table 1======================================
     #==================================================================

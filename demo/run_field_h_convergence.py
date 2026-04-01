@@ -9,7 +9,7 @@ from experiments.field_h_convergence import (
 from pathlib import Path
 
 def main():
-    output_dir = Path(r"C:\Users\user\Desktop\triangle-dg-project\experiments_outputs")
+    output_dir = Path(__file__).resolve().parents[1] / "experiments_outputs"
     output_dir.mkdir(parents=True, exist_ok=True)
     
     config = FieldHConvergenceConfig(

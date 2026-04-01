@@ -9,7 +9,7 @@ from visualization.node_plot import plot_nodes
 
 
 def main() -> None:
-    output_dir = Path(r"C:\Users\user\Desktop\triangle_dg_project\photo")
+    output_dir = Path(__file__).resolve().parents[1] / "photo"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     vertices = reference_triangle_vertices()

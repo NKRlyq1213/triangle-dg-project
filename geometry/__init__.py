@@ -3,7 +3,11 @@ from .reference_triangle import (
     reference_triangle_area,
     reference_triangle_centroid,
 )
-from .barycentric import barycentric_to_cartesian, cartesian_to_barycentric
+from .barycentric import (
+    barycentric_to_cartesian,
+    cartesian_to_barycentric,
+    raw_barycentric_to_reference_rs,
+)
 from .mesh_structured import (
     structured_square_tri_mesh,
     triangle_signed_area,
@@ -25,6 +29,13 @@ from .metrics import (
     affine_metric_terms_from_vertices,
     affine_geometric_factors_from_mesh,
 )
+from .edges import (
+    edge_vertices,
+    edge_parameterization,
+    edge_length,
+)
+from .display_points import build_display_points
+from .sampling import dense_barycentric_lattice
 
 __all__ = [
     "reference_triangle_vertices",
@@ -32,6 +43,7 @@ __all__ = [
     "reference_triangle_centroid",
     "barycentric_to_cartesian",
     "cartesian_to_barycentric",
+    "raw_barycentric_to_reference_rs",
     "structured_square_tri_mesh",
     "triangle_signed_area",
     "element_areas_and_orientations",
@@ -47,4 +59,9 @@ __all__ = [
     "divergence_2d",
     "affine_metric_terms_from_vertices",
     "affine_geometric_factors_from_mesh",
+    "edge_vertices",
+    "edge_parameterization",
+    "edge_length",
+    "build_display_points",
+    "dense_barycentric_lattice",
 ]

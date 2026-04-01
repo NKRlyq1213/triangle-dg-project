@@ -13,7 +13,7 @@ from problems.analytic_fields import ground_truth_function
 from visualization.radial_plot import plot_radial_field, plot_radial_profile
 
 def main() -> None:
-    output_dir = Path(r"C:\Users\user\Desktop\triangle_dg_project\photo")
+    output_dir = Path(__file__).resolve().parents[1] / "photo"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     vertices = reference_triangle_vertices()
