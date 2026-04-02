@@ -135,6 +135,14 @@ python demo/demo_error_field_table2.py
 python demo/demo_radial_sampling_table2.py
 ```
 
+or
+
+```bash
+python -m demo.demo_reconstruct_field_table1
+python -m demo.demo_error_field_table2
+python -m demo.demo_radial_sampling_table2
+```
+
 ## Output Location
 
 Demo figures are saved under:
