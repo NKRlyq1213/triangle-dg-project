@@ -37,6 +37,13 @@ from .edges import (
 from .display_points import build_display_points
 from .sampling import dense_barycentric_lattice
 
+from .connectivity import (
+    local_face_vertex_ids,
+    all_face_vertex_ids,
+    face_midpoints,
+    build_face_connectivity,
+    validate_face_connectivity,
+)
 __all__ = [
     "reference_triangle_vertices",
     "reference_triangle_area",
@@ -64,4 +71,10 @@ __all__ = [
     "edge_length",
     "build_display_points",
     "dense_barycentric_lattice",
+    "local_face_vertex_ids",
+    "all_face_vertex_ids",
+    "face_midpoints",
+    "build_face_connectivity",
+    "validate_face_connectivity",
+    
 ]
