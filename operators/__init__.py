@@ -34,6 +34,21 @@ from .exchange import (
     pair_face_traces,
     interior_face_pair_mismatches,
 )
+
+from .rhs_split_conservative_exact_trace import (
+    volume_term_split_conservative,
+    surface_term_from_exact_trace,
+    upwind_flux_and_penalty,
+)
+
+from .rhs_split_conservative_exchange import (
+    volume_term_split_conservative,
+    upwind_flux_and_penalty,
+    upwind_penalty_simplified,
+    fill_exterior_state,
+    fill_boundary_exterior_state_upwind,
+    surface_term_from_exchange,
+)
 __all__ = [
     "vandermonde2d",
     "grad_vandermonde2d",
@@ -60,4 +75,11 @@ __all__ = [
     "unique_interior_face_pairs",
     "pair_face_traces",
     "interior_face_pair_mismatches",
+    "volume_term_split_conservative",
+    "surface_term_from_exact_trace",
+    "upwind_flux_and_penalty",
+    "upwind_penalty_simplified",
+    "fill_exterior_state",
+    "fill_boundary_exterior_state_upwind",
+    "surface_term_from_exchange",
 ]

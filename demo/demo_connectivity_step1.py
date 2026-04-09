@@ -287,8 +287,8 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     VX, VY, EToV = structured_square_tri_mesh(
-        nx=2,
-        ny=2,
+        nx=3,
+        ny=3,
         xlim=(0.0, 1.0),
         ylim=(0.0, 1.0),
         diagonal="anti",

@@ -11,11 +11,11 @@ from pathlib import Path
 def main():
     output_dir = Path(__file__).resolve().parents[1] / "experiments_outputs"
     output_dir.mkdir(parents=True, exist_ok=True)
-    
+
     config = FieldHConvergenceConfig(
         table_name="table1",
         order=4,
-        N=3,
+        N=4,
         diagonal="anti",
         mesh_levels=(1, 2, 4, 8, 16, 32, 64, 128, 256),
         eval_resolution=12,
@@ -27,8 +27,8 @@ def main():
 
     results = run_field_h_convergence(config)
 
-    csv_path = output_dir / "field_h_convergence_table1_order4_N3_anti.csv"
-
+    csv_path = output_dir / "field_h_convergence_table1_order4_N4_anti.csv"
+    print("Field h-convergence table1_order4_N4")
     print()
     print_results_table(results)
 

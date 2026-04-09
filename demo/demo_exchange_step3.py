@@ -19,14 +19,11 @@ from operators import (
 
 
 def _global_poly(x: np.ndarray, y: np.ndarray) -> np.ndarray:
-    return (
-        1.0
-        + 2.0 * x
-        - 0.5 * y
-        + 0.75 * x * y
-        + 0.30 * x**2
-        - 0.20 * y**2
-    )
+    r0 = 0.5
+    s0 = 0.5
+    sigma = np.sqrt(1/30)
+    return np.exp(-((x - r0)**2 + (y - s0)**2) / (2.0 * sigma**2))
+
 
 
 def _draw_mesh(ax, VX: np.ndarray, VY: np.ndarray, EToV: np.ndarray) -> None:
@@ -184,8 +181,8 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     VX, VY, EToV = structured_square_tri_mesh(
-        nx=2,
-        ny=2,
+        nx=64,
+        ny=64,
         xlim=(0.0, 1.0),
         ylim=(0.0, 1.0),
         diagonal="anti",

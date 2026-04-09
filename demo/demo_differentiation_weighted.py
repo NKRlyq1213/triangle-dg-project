@@ -254,7 +254,7 @@ def main() -> None:
         levels=25,
         show_nodes=True,
     )
-    fig1.savefig(outdir / "differentiation_error_dr_table1_polynomial.png", dpi=200, bbox_inches="tight")
+    fig1.savefig(output_dir / "differentiation_error_dr_table1_polynomial.png", dpi=200, bbox_inches="tight")
     plt.close(fig1)
 
     fig2, ax2 = plot_triangle_field(
@@ -266,14 +266,14 @@ def main() -> None:
         levels=25,
         show_nodes=True,
     )
-    fig2.savefig(outdir / "differentiation_error_ds_table1_polynomial.png", dpi=200, bbox_inches="tight")
+    fig2.savefig(output_dir / "differentiation_error_ds_table1_polynomial.png", dpi=200, bbox_inches="tight")
     plt.close(fig2)
 
     print()
     print("=" * 60)
     print("OUTPUT")
     print("=" * 60)
-    print(f"Saved figures to: {outdir}")
+    print(f"Saved figures to: {output_dir}")
     print("  - differentiation_error_dr_table1_polynomial.png")
     print("  - differentiation_error_ds_table1_polynomial.png")
 
@@ -419,7 +419,7 @@ def main() -> None:
         levels=25,
         show_nodes=True,
     )
-    fig1.savefig(outdir / "differentiation_error_dr_table1_smooth.png", dpi=200, bbox_inches="tight")
+    fig1.savefig(output_dir / "differentiation_error_dr_table1_smooth.png", dpi=200, bbox_inches="tight")
     plt.close(fig1)
 
     fig2, ax2 = plot_triangle_field(
@@ -431,14 +431,14 @@ def main() -> None:
         levels=25,
         show_nodes=True,
     )
-    fig2.savefig(outdir / "differentiation_error_ds_table1_smooth.png", dpi=200, bbox_inches="tight")
+    fig2.savefig(output_dir / "differentiation_error_ds_table1_smooth.png", dpi=200, bbox_inches="tight")
     plt.close(fig2)
 
     print()
     print("=" * 60)
     print("OUTPUT")
     print("=" * 60)
-    print(f"Saved figures to: {outdir}")
+    print(f"Saved figures to: {output_dir}")
     print("  - differentiation_error_dr_table1_smooth.png")
     print("  - differentiation_error_ds_table1_smooth.png")
 
@@ -463,7 +463,7 @@ def main() -> None:
         levels=25,
         show_nodes=True,
     )
-    fig1.savefig(outdir / "differentiation_exact_dr_table1_smooth.png", dpi=200, bbox_inches="tight")
+    fig1.savefig(output_dir / "differentiation_exact_dr_table1_smooth.png", dpi=200, bbox_inches="tight")
     plt.close(fig1)
     fig2, ax2 = plot_triangle_field(
         rs_eval=rs_eval,
@@ -474,7 +474,7 @@ def main() -> None:
         levels=25,
         show_nodes=True,
     )
-    fig2.savefig(outdir / "differentiation_exact_ds_table1_smooth.png", dpi=200, bbox_inches="tight")
+    fig2.savefig(output_dir / "differentiation_exact_ds_table1_smooth.png", dpi=200, bbox_inches="tight")
     plt.close(fig2)
     
     #==================================================================
@@ -644,7 +644,7 @@ def main() -> None:
         levels=25,
         show_nodes=True,
     )
-    fig1.savefig(outdir / "differentiation_error_dr_table2_polynomial.png", dpi=200, bbox_inches="tight")
+    fig1.savefig(output_dir / "differentiation_error_dr_table2_polynomial.png", dpi=200, bbox_inches="tight")
     plt.close(fig1)
 
     fig2, ax2 = plot_triangle_field(
@@ -656,14 +656,14 @@ def main() -> None:
         levels=25,
         show_nodes=True,
     )
-    fig2.savefig(outdir / "differentiation_error_ds_table2_polynomial.png", dpi=200, bbox_inches="tight")
+    fig2.savefig(output_dir / "differentiation_error_ds_table2_polynomial.png", dpi=200, bbox_inches="tight")
     plt.close(fig2)
 
     print()
     print("=" * 60)
     print("OUTPUT")
     print("=" * 60)
-    print(f"Saved figures to: {outdir}")
+    print(f"Saved figures to: {output_dir}")
     print("  - differentiation_error_dr_table2_polynomial.png")
     print("  - differentiation_error_ds_table2_polynomial.png")
 
@@ -808,7 +808,7 @@ def main() -> None:
         levels=25,
         show_nodes=True,
     )
-    fig1.savefig(outdir / "differentiation_error_dr_table2_smooth.png", dpi=200, bbox_inches="tight")
+    fig1.savefig(output_dir / "differentiation_error_dr_table2_smooth.png", dpi=200, bbox_inches="tight")
     plt.close(fig1)
 
     fig2, ax2 = plot_triangle_field(
@@ -820,14 +820,14 @@ def main() -> None:
         levels=25,
         show_nodes=True,
     )
-    fig2.savefig(outdir / "differentiation_error_ds_table2_smooth.png", dpi=200, bbox_inches="tight")
+    fig2.savefig(output_dir / "differentiation_error_ds_table2_smooth.png", dpi=200, bbox_inches="tight")
     plt.close(fig2)
 
     print()
     print("=" * 60)
     print("OUTPUT")
     print("=" * 60)
-    print(f"Saved figures to: {outdir}")
+    print(f"Saved figures to: {output_dir}")
     print("  - differentiation_error_dr_table2_smooth.png")
     print("  - differentiation_error_ds_table2_smooth.png")
 
@@ -852,7 +852,7 @@ def main() -> None:
         levels=25,
         show_nodes=True,
     )
-    fig1.savefig(outdir / "differentiation_exact_dr_table2_smooth.png", dpi=200, bbox_inches="tight")
+    fig1.savefig(output_dir / "differentiation_exact_dr_table2_smooth.png", dpi=200, bbox_inches="tight")
     plt.close(fig1)
     fig2, ax2 = plot_triangle_field(
         rs_eval=rs_eval,
@@ -863,7 +863,7 @@ def main() -> None:
         levels=25,
         show_nodes=True,
     )
-    fig2.savefig(outdir / "differentiation_exact_ds_table2_smooth.png", dpi=200, bbox_inches="tight")
+    fig2.savefig(output_dir / "differentiation_exact_ds_table2_smooth.png", dpi=200, bbox_inches="tight")
     plt.close(fig2)
 
 if __name__ == "__main__":

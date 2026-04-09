@@ -37,8 +37,8 @@ class FieldHConvergenceConfig:
     eval_resolution: int = 12
 
     # Gaussian parameters
-    x0: float = 0.35
-    y0: float = 0.55
+    x0: float = 0.5
+    y0: float = 0.5
     sigma: float = 0.16
 
     verbose: bool = True

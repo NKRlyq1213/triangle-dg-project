@@ -44,6 +44,12 @@ from .connectivity import (
     build_face_connectivity,
     validate_face_connectivity,
 )
+
+from .face_metrics import (
+    affine_face_geometry_from_vertices,
+    affine_face_geometry_from_mesh
+)
+
 __all__ = [
     "reference_triangle_vertices",
     "reference_triangle_area",
@@ -76,5 +82,6 @@ __all__ = [
     "face_midpoints",
     "build_face_connectivity",
     "validate_face_connectivity",
-    
+    "affine_face_geometry_from_vertices",
+    "affine_face_geometry_from_mesh"
 ]
