@@ -177,7 +177,7 @@ def _plot_global_exchange_mismatch(ax, VX, VY, EToV, conn, paired, title: str) -
     ax.grid(True, alpha=0.2)
 
 def main() -> None:
-    output_dir = Path(__file__).resolve().parents[1] / "photo"
+    output_dir = Path(__file__).resolve().parents[2] / "photo"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     VX, VY, EToV = structured_square_tri_mesh(

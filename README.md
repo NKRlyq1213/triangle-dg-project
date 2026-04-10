@@ -4,13 +4,15 @@ Triangle-domain polynomial reconstruction and DG-oriented operators on the refer
 
 ## Overview
 
-This repository provides the numerical building blocks needed for triangle-based polynomial approximation and DG-oriented operator construction. The current implementation focuses on basis functions, quadrature handling, reconstruction, differentiation, affine mappings, edge evaluation operators, and visualization tools on the reference triangle.
+This repository provides numerical building blocks for triangle-based polynomial approximation and DG-oriented operator construction.
 
-At its current stage, the project should be viewed as a **numerical foundation** for later discontinuous Galerkin development rather than a complete production DG solver.
+Current scope focuses on basis functions, quadrature handling, reconstruction, differentiation, affine mappings, edge evaluation operators, and visualization utilities on the reference triangle.
+
+At this stage, the project is a numerical foundation for later DG development, not a full production DG solver.
 
 ## Features
 
-- Triangle quadrature handling from Table 1 / Table 2 datasets
+- Triangle quadrature handling from Table 1 and Table 2 datasets
 - Symmetry-orbit expansion into full quadrature point sets
 - Classical and orthonormal Jacobi polynomials
 - 2D simplex basis functions on the reference triangle
@@ -39,7 +41,7 @@ geometry/
 
 operators/
     Vandermonde construction, mass matrices, differentiation operators,
-    reconstruction routines, boundary / edge operators, and split-form tools.
+    reconstruction routines, boundary and edge operators, and split-form tools.
 
 problems/
     Analytic test fields and initial-condition wrappers.
@@ -47,14 +49,25 @@ problems/
 visualization/
     Plotting utilities for nodes, scalar fields, and radial diagnostics.
 
-utils/
-    Small helper checks.
-
 demo/
-    Example scripts for reconstruction and visualization.
+    foundations/
+        Smoke checks and connectivity/trace/exchange step demos.
+    visualization/
+        Node, reconstruction, error, 3D, mesh-node, and radial demos.
+    advanced/
+        Differentiation and split-form diagnostics.
+    experiments/
+        h-convergence execution scripts.
 
 tests/
-    Test directory for numerical verification.
+    unit/
+        Geometry and core component tests.
+    integration/
+        Multi-module operator and RHS consistency tests.
+    regression/
+        LSRK regression tests (kept but currently deferred in routine validation).
+    test_*.py (root stubs)
+        Placeholder empty test files intentionally kept at tests root.
 ```
 
 ## Installation
@@ -65,10 +78,10 @@ Recommended Python version:
 
 Minimal dependencies:
 
-- `numpy>=1.26`
-- `scipy>=1.11`
-- `matplotlib>=3.8`
-- `pytest>=7.4`
+- numpy>=1.26
+- scipy>=1.11
+- matplotlib>=3.8
+- pytest>=7.4
 
 Install with:
 
@@ -125,39 +138,88 @@ coeffs = fit_modal_coefficients_weighted(
 )
 ```
 
-## Demo Scripts
+## Demo Run Guide
 
-Typical demo runs:
+Use module execution from project root:
 
-```bash
-python demo/demo_reconstruct_field_table1.py
-python demo/demo_error_field_table2.py
-python demo/demo_radial_sampling_table2.py
-```
-
-or
+### Foundations
 
 ```bash
-python -m demo.demo_reconstruct_field_table1
-python -m demo.demo_error_field_table2
-python -m demo.demo_radial_sampling_table2
+python -m demo.foundations.smoke_phase1
+python -m demo.foundations.smoke_table_rules
+python -m demo.foundations.demo_connectivity_step1
+python -m demo.foundations.demo_trace_policy_step2
+python -m demo.foundations.demo_exchange_step3
 ```
+
+### Visualization
+
+```bash
+python -m demo.visualization.demo_plot_nodes --table both
+python -m demo.visualization.demo_reconstruct_field --table table1
+python -m demo.visualization.demo_error_field --table table2
+python -m demo.visualization.demo_3d --table table1
+python -m demo.visualization.demo_plot_mesh_nodes
+python -m demo.visualization.demo_radial_sampling_table2
+```
+
+### Advanced
+
+```bash
+python -m demo.advanced.demo_differentiation_weighted
+python -m demo.advanced.demo_split_gaussian_field
+```
+
+### Experiments
+
+```bash
+python -m demo.experiments.run_field_h_convergence
+python -m demo.experiments.run_div_h_convergence
+```
+
+## Demo Migration Map
+
+| Old script | New command |
+|---|---|
+| demo_plot_nodes_table1.py / demo_plot_nodes_table2.py | python -m demo.visualization.demo_plot_nodes --table table1 or --table table2 |
+| demo_reconstruct_field_table1.py / demo_reconstruct_field_table2.py | python -m demo.visualization.demo_reconstruct_field --table table1 or --table table2 |
+| demo_error_field_table1.py / demo_error_field_table2.py | python -m demo.visualization.demo_error_field --table table1 or --table table2 |
+| demo_3d_table1.py / demo_3d_table2.py | python -m demo.visualization.demo_3d --table table1 or --table table2 |
+
+No compatibility wrappers are kept for old root-level table-specific script names.
+
+## Testing
+
+Current routine validation commands:
+
+```bash
+pytest tests/unit
+pytest tests/integration
+pytest tests -k "not lsrk"
+```
+
+Notes:
+
+- LSRK regression tests are preserved under tests/regression but are not part of this validation round.
+- Empty placeholder test files remain in tests root by design and are not moved.
 
 ## Output Location
 
-Demo figures are saved under:
+Generated figures are written under:
 
 ```text
 photo/
 ```
 
-in the project root directory.
+Convergence CSV outputs are written under:
 
-This keeps generated figures inside the repository and avoids machine-specific desktop paths.
+```text
+experiments_outputs/
+```
+
+Both are resolved from project root.
 
 ## Current Scope
-
-The repository currently provides the approximation and operator layer for triangle-based DG-style work.
 
 Already implemented:
 
@@ -179,25 +241,14 @@ Not yet fully developed:
 
 ## Recommended Next Development Steps
 
-1. Strengthen exactness and regression tests
+1. Expand exactness and regression coverage for currently empty test stubs
 2. Finalize stable public APIs across modules
 3. Add numerical flux coupling across mesh interfaces
 4. Build end-to-end DG examples on multi-element triangular meshes
 
-## Project Positioning
-
-This code base is best suited for:
-
-- numerical experiments on triangle-based polynomial approximation
-- DG pre-development and operator verification
-- reconstruction and differentiation studies
-- geometry/operator prototyping before full solver assembly
-
 ## Development Principles
 
-When extending this project, keep the following priorities:
-
-1. correctness before optimization
-2. exactness tests before large demos
-3. geometry consistency before mapped-operator use
-4. clear module interfaces before solver-level expansion
+1. Correctness before optimization
+2. Exactness tests before large demos
+3. Geometry consistency before mapped-operator use
+4. Clear module interfaces before solver-level expansion

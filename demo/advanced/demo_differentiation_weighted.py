@@ -3,7 +3,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -85,7 +85,7 @@ def report_error(name: str, num: np.ndarray, exact: np.ndarray) -> None:
 
 
 def main() -> None:
-    output_dir = Path(__file__).resolve().parents[1] / "photo" / "differentiation_photo"
+    output_dir = Path(__file__).resolve().parents[2] / "photo" / "differentiation_photo"
     output_dir.mkdir(parents=True, exist_ok=True)
     #==================================================================
     #=====================table 1======================================

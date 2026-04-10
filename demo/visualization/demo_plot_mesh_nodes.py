@@ -50,7 +50,7 @@ def initial_field(
 
 
 def main():
-    output_dir = Path(__file__).resolve().parents[1] / "photo"
+    output_dir = Path(__file__).resolve().parents[2] / "photo"
     output_dir.mkdir(parents=True, exist_ok=True)
     # -----------------------------
     # user-configurable parameters

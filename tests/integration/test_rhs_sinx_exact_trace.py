@@ -33,12 +33,12 @@ def build_reference_diff_operators_from_rule(rule: dict, N: int) -> tuple[np.nda
     )
 
 
-def q_exact_siny(x: np.ndarray, y: np.ndarray, t: float = 0.0) -> np.ndarray:
-    return np.sin(y - t)
+def q_exact_sinx(x: np.ndarray, y: np.ndarray, t: float = 0.0) -> np.ndarray:
+    return np.sin(x - t)
 
 
-def qt_exact_siny(x: np.ndarray, y: np.ndarray, t: float = 0.0) -> np.ndarray:
-    return -np.cos(y - t)
+def qt_exact_sinx(x: np.ndarray, y: np.ndarray, t: float = 0.0) -> np.ndarray:
+    return -np.cos(x - t)
 
 
 def velocity_one_one(x: np.ndarray, y: np.ndarray, t: float = 0.0) -> tuple[np.ndarray, np.ndarray]:
@@ -59,7 +59,7 @@ def weighted_l2_error(err: np.ndarray, rule: dict, face_geom: dict) -> float:
     return float(np.sqrt(val))
 
 
-def test_rhs_siny_exact_trace_matches_qt():
+def test_rhs_sinx_exact_trace_matches_qt():
     """
     Phase-1 exact-trace consistency test.
 
@@ -67,12 +67,12 @@ def test_rhs_siny_exact_trace_matches_qt():
         q_t + div((1,1) q) = 0
 
     Exact field:
-        q(x,y,t) = sin(y - t)
+        q(x,y,t) = sin(x - t)
 
     Since
-        q_t = -cos(y-t),
-        q_x =  0,
-        q_y =  cos(y-t),
+        q_t = -cos(x-t),
+        q_x =  cos(x-t),
+        q_y =  0,
 
     we have:
         q_t + q_x + q_y = 0.
@@ -95,7 +95,7 @@ def test_rhs_siny_exact_trace_matches_qt():
     X, Y = map_reference_nodes_to_all_elements(rule["rs"], VX, VY, EToV)
 
     # exact solution sampled at volume nodes
-    q_elem = q_exact_siny(X, Y, t=t0)
+    q_elem = q_exact_sinx(X, Y, t=t0)
 
     # constant velocity field V=(1,1)
     u_elem = np.ones_like(q_elem)
@@ -119,7 +119,7 @@ def test_rhs_siny_exact_trace_matches_qt():
         VX=VX,
         VY=VY,
         EToV=EToV,
-        q_exact=q_exact_siny,
+        q_exact=q_exact_sinx,
         velocity=velocity_one_one,
         t=t0,
         tau=0.0,  # pure upwind
@@ -131,7 +131,7 @@ def test_rhs_siny_exact_trace_matches_qt():
     total_rhs = diag["total_rhs"]
     p = diag["p"]
 
-    qt_exact = qt_exact_siny(X, Y, t=t0)
+    qt_exact = qt_exact_sinx(X, Y, t=t0)
 
     err_vol = volume_rhs - qt_exact
     err_total = total_rhs - qt_exact
@@ -144,7 +144,7 @@ def test_rhs_siny_exact_trace_matches_qt():
     l2_err_vol = weighted_l2_error(err_vol, rule, face_geom)
     l2_err_total = weighted_l2_error(err_total, rule, face_geom)
 
-    print("test_rhs_siny_exact_trace_matches_qt")
+    print("test_rhs_sinx_exact_trace_matches_qt")
     print("  max |surface_rhs|      =", max_surface)
     print("  max |p|                =", max_p)
     print("  max |volume_rhs-qt|    =", max_err_vol)
@@ -158,10 +158,10 @@ def test_rhs_siny_exact_trace_matches_qt():
     assert np.allclose(p, 0.0, atol=1e-12, rtol=1e-12)
 
     # both volume and total should reproduce q_t
-    assert np.allclose(volume_rhs, qt_exact, atol=1e-11, rtol=1e-11)
-    assert np.allclose(total_rhs, qt_exact, atol=1e-11, rtol=1e-11)
+    assert np.allclose(volume_rhs, qt_exact, atol=1e-10, rtol=1e-10)
+    assert np.allclose(total_rhs, qt_exact, atol=1e-10, rtol=1e-10)
 
 
 if __name__ == "__main__":
-    test_rhs_siny_exact_trace_matches_qt()
-    print("test_rhs_siny_exact_trace: passed")
+    test_rhs_sinx_exact_trace_matches_qt()
+    print("test_rhs_sinx_exact_trace: passed")

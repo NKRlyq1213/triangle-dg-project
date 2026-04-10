@@ -59,7 +59,7 @@ def _plot_face_ordered_points(ax, trace: dict, face_color: dict[int, str]) -> No
 
 
 def main() -> None:
-    output_dir = Path(__file__).resolve().parents[1] / "photo"
+    output_dir = Path(__file__).resolve().parents[2] / "photo"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     vertices = reference_triangle_vertices()
