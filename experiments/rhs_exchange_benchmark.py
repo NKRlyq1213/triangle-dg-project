@@ -20,7 +20,10 @@ from operators.differentiation import (
     differentiation_matrices_weighted,
 )
 from operators.trace_policy import build_trace_policy
-from operators.rhs_split_conservative_exchange import rhs_split_conservative_exchange
+from operators.rhs_split_conservative_exchange import (
+    rhs_split_conservative_exchange,
+    build_surface_exchange_cache,
+)
 
 
 @dataclass(frozen=True)
@@ -34,6 +37,8 @@ class RHSExchangeBenchmarkConfig:
     t_eval: float = 0.1
     tau: float = 0.0
     backends: tuple[str, ...] = ("numpy", "auto", "numba")
+    surface_backends: tuple[str, ...] = ("legacy", "face-major")
+    use_surface_cache: bool = True
     modes: tuple[str, ...] = ("full", "perf")
     verbose: bool = True
 
@@ -64,6 +69,13 @@ def _resolve_mode(mode: str) -> tuple[bool, bool]:
     if mode == "perf":
         return False, False
     raise ValueError("mode must be 'full' or 'perf'.")
+
+
+def _resolve_surface_backend_name(name: str) -> str:
+    value = str(name).lower().strip()
+    if value not in ("legacy", "face-major"):
+        raise ValueError("surface backend must be 'legacy' or 'face-major'.")
+    return value
 
 
 def _build_reference_diff_operators(rule: dict, N: int) -> tuple[np.ndarray, np.ndarray]:
@@ -106,6 +118,12 @@ def _build_case_data(config: RHSExchangeBenchmarkConfig, n: int) -> _CaseData:
 
     geom = affine_geometric_factors_from_mesh(VX, VY, EToV, rule["rs"])
     face_geom = affine_face_geometry_from_mesh(VX, VY, EToV, trace)
+    surface_cache = build_surface_exchange_cache(
+        rule=rule,
+        trace=trace,
+        conn=conn,
+        face_geom=face_geom,
+    )
 
     return _CaseData(
         rule=rule,
@@ -115,6 +133,7 @@ def _build_case_data(config: RHSExchangeBenchmarkConfig, n: int) -> _CaseData:
         conn=conn,
         geom=geom,
         face_geom=face_geom,
+        surface_cache=surface_cache,
         q_elem=q_elem,
         u_elem=u_elem,
         v_elem=v_elem,
@@ -127,6 +146,7 @@ def _bench_one(
     case: _CaseData,
     config: RHSExchangeBenchmarkConfig,
     use_numba: bool | None,
+    surface_backend: str,
     compute_mismatches: bool,
     return_diagnostics: bool,
 ) -> tuple[float, float]:
@@ -149,6 +169,8 @@ def _bench_one(
             compute_mismatches=compute_mismatches,
             return_diagnostics=return_diagnostics,
             use_numba=use_numba,
+            surface_backend=surface_backend,
+            surface_cache=case["surface_cache"] if config.use_surface_cache else None,
         )
         return rhs
 
@@ -184,51 +206,62 @@ def run_rhs_exchange_benchmark(config: RHSExchangeBenchmarkConfig) -> list[dict]
                 requested_use_numba is None or requested_use_numba
             )
 
-            for mode in config.modes:
-                compute_mismatches, return_diagnostics = _resolve_mode(mode)
+            for surface_backend in config.surface_backends:
+                resolved_surface_backend = _resolve_surface_backend_name(surface_backend)
 
-                elapsed, checksum = _bench_one(
-                    case=case,
-                    config=config,
-                    use_numba=requested_use_numba,
-                    compute_mismatches=compute_mismatches,
-                    return_diagnostics=return_diagnostics,
-                )
+                for mode in config.modes:
+                    compute_mismatches, return_diagnostics = _resolve_mode(mode)
 
-                per_call_ms = 1000.0 * elapsed / float(config.repeats)
-
-                row = {
-                    "nx": n,
-                    "ny": n,
-                    "K_tri": case["K"],
-                    "Np": case["Np"],
-                    "repeats": int(config.repeats),
-                    "warmup": int(config.warmup),
-                    "backend": str(backend),
-                    "mode": str(mode),
-                    "requested_use_numba": str(requested_use_numba),
-                    "effective_use_numba": bool(effective_use_numba),
-                    "numba_installed": bool(has_numba),
-                    "compute_mismatches": bool(compute_mismatches),
-                    "return_diagnostics": bool(return_diagnostics),
-                    "elapsed_sec": float(elapsed),
-                    "per_call_ms": float(per_call_ms),
-                    "checksum": float(checksum),
-                }
-                mesh_rows.append(row)
-
-                if config.verbose:
-                    print(
-                        f"  [bench] backend={backend:>5s} mode={mode:>4s} "
-                        f"per_call={per_call_ms:9.4f} ms "
-                        f"(numba_effective={effective_use_numba})"
+                    elapsed, checksum = _bench_one(
+                        case=case,
+                        config=config,
+                        use_numba=requested_use_numba,
+                        surface_backend=resolved_surface_backend,
+                        compute_mismatches=compute_mismatches,
+                        return_diagnostics=return_diagnostics,
                     )
 
+                    per_call_ms = 1000.0 * elapsed / float(config.repeats)
+
+                    row = {
+                        "nx": n,
+                        "ny": n,
+                        "K_tri": case["K"],
+                        "Np": case["Np"],
+                        "repeats": int(config.repeats),
+                        "warmup": int(config.warmup),
+                        "backend": str(backend),
+                        "surface_backend": str(resolved_surface_backend),
+                        "mode": str(mode),
+                        "requested_use_numba": str(requested_use_numba),
+                        "effective_use_numba": bool(effective_use_numba),
+                        "numba_installed": bool(has_numba),
+                        "compute_mismatches": bool(compute_mismatches),
+                        "return_diagnostics": bool(return_diagnostics),
+                        "elapsed_sec": float(elapsed),
+                        "per_call_ms": float(per_call_ms),
+                        "checksum": float(checksum),
+                    }
+                    mesh_rows.append(row)
+
+                    if config.verbose:
+                        print(
+                            f"  [bench] backend={backend:>5s} sback={resolved_surface_backend:>10s} "
+                            f"mode={mode:>4s} per_call={per_call_ms:9.4f} ms "
+                            f"(numba_effective={effective_use_numba})"
+                        )
+
         baseline_candidates = [
-            r for r in mesh_rows if r["backend"] == "numpy" and r["mode"] == "full"
+            r
+            for r in mesh_rows
+            if r["backend"] == "numpy"
+            and r["surface_backend"] == "legacy"
+            and r["mode"] == "full"
         ]
         if len(baseline_candidates) != 1:
-            raise RuntimeError("Expected exactly one baseline row: backend=numpy, mode=full")
+            raise RuntimeError(
+                "Expected exactly one baseline row: backend=numpy, surface_backend=legacy, mode=full"
+            )
 
         baseline_ms = float(baseline_candidates[0]["per_call_ms"])
         baseline_ms_by_mesh[n] = baseline_ms
@@ -243,7 +276,7 @@ def run_rhs_exchange_benchmark(config: RHSExchangeBenchmarkConfig) -> list[dict]
 
 def print_results_table(results: list[dict]) -> None:
     header = (
-        f"{'n':>5s} {'K':>8s} {'backend':>8s} {'mode':>6s} "
+        f"{'n':>5s} {'K':>8s} {'backend':>8s} {'surface':>10s} {'mode':>6s} "
         f"{'numba':>7s} {'per_call_ms':>12s} {'speedup':>9s}"
     )
     print(header)
@@ -254,6 +287,7 @@ def print_results_table(results: list[dict]) -> None:
             f"{int(r['nx']):5d} "
             f"{int(r['K_tri']):8d} "
             f"{str(r['backend']):>8s} "
+            f"{str(r['surface_backend']):>10s} "
             f"{str(r['mode']):>6s} "
             f"{str(r['effective_use_numba']):>7s} "
             f"{float(r['per_call_ms']):12.4f} "

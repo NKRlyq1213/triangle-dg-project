@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from dataclasses import replace
 from time import perf_counter
 import math
 import csv
 import numpy as np
+from typing import Callable
 
 from data.table1_rules import load_table1_rule
 
@@ -22,9 +24,14 @@ from operators.differentiation import (
 )
 from operators.mass import mass_matrix_from_quadrature
 from operators.trace_policy import build_trace_policy
-from operators.rhs_split_conservative_exchange import rhs_split_conservative_exchange
+from operators.rhs_split_conservative_exchange import (
+    rhs_split_conservative_exchange,
+    build_surface_exchange_cache,
+    build_volume_split_cache,
+)
 
 from time_integration.lsrk54 import integrate_lsrk54
+from time_integration.lsrk54 import RK4A, RK4B
 from time_integration.CFL import mesh_min_altitude, cfl_dt_from_h, vmax_from_uv
 
 
@@ -44,9 +51,109 @@ class LSRKHConvergenceConfig:
     tf_values: tuple[float, ...] = (1.0, 10.0)
 
     tau: float = 0.0
-    use_numba: bool | None = None
+    use_numba: bool | None = True
     enforce_polynomial_projection: bool = True
+    projection_mode: str = "post"
+    projection_frequency: str = "step"
+    surface_backend: str = "face-major"
+    use_surface_cache: bool = True
+    use_sinx_rk_stage_boundary_correction: bool = False
+    q_boundary_correction: Callable | None = None
+    q_boundary_correction_mode: str = "inflow"
     verbose: bool = True
+
+
+class SinxRKStageBoundaryCorrection:
+    """
+    Notebook-style boundary state evolution synchronized with LSRK stage calls.
+
+    This tracks [g, g_t, g_tt] using the same low-storage RK coefficients and
+    returns delta_qB = g_stage - g_exact(t_stage).
+    """
+
+    def __init__(self, dt: float):
+        dt = float(dt)
+        if dt <= 0.0:
+            raise ValueError("dt must be positive for SinxRKStageBoundaryCorrection.")
+
+        self._dt = dt
+        self._initialized = False
+        self._stage = 0
+        self._last_t = -np.inf
+
+        self._g = None
+        self._g_t = None
+        self._g_tt = None
+        self._Kg = None
+        self._Kgt = None
+        self._Kgtt = None
+
+    def _reset(self, x_face: np.ndarray, t: float, expected_shape: tuple[int, int, int]) -> None:
+        phase = x_face - float(t)
+
+        self._g = np.sin(phase)
+        self._g_t = -np.cos(phase)
+        self._g_tt = -np.sin(phase)
+
+        self._Kg = np.zeros(expected_shape, dtype=float)
+        self._Kgt = np.zeros(expected_shape, dtype=float)
+        self._Kgtt = np.zeros(expected_shape, dtype=float)
+
+        self._stage = 0
+        self._last_t = float(t)
+        self._initialized = True
+
+    def __call__(
+        self,
+        x_face: np.ndarray,
+        y_face: np.ndarray,
+        t: float,
+        qM: np.ndarray,
+        ndotV: np.ndarray,
+        is_boundary: np.ndarray,
+        q_boundary_exact: np.ndarray,
+    ) -> np.ndarray:
+        del y_face, qM, ndotV, is_boundary
+
+        x_face = np.asarray(x_face, dtype=float)
+        q_boundary_exact = np.asarray(q_boundary_exact, dtype=float)
+
+        if x_face.shape != q_boundary_exact.shape:
+            raise ValueError("x_face and q_boundary_exact must share shape (K, 3, Nfp).")
+
+        if (
+            (not self._initialized)
+            or (t < self._last_t - 1e-14)
+            or (self._g is None)
+            or (self._g.shape != q_boundary_exact.shape)
+        ):
+            self._reset(x_face=x_face, t=float(t), expected_shape=q_boundary_exact.shape)
+
+        delta = self._g - q_boundary_exact
+
+        s = self._stage
+        g_ttt = np.cos(x_face - float(t))
+
+        self._Kg *= RK4A[s]
+        self._Kgt *= RK4A[s]
+        self._Kgtt *= RK4A[s]
+
+        self._Kg += self._dt * self._g_t
+        self._Kgt += self._dt * self._g_tt
+        self._Kgtt += self._dt * g_ttt
+
+        self._g += RK4B[s] * self._Kg
+        self._g_t += RK4B[s] * self._Kgt
+        self._g_tt += RK4B[s] * self._Kgtt
+
+        self._stage = (s + 1) % 5
+        self._last_t = float(t)
+
+        return delta
+
+
+def build_sinx_rk_stage_boundary_correction(dt: float) -> Callable:
+    return SinxRKStageBoundaryCorrection(dt=dt)
 
 
 def build_reference_diff_operators_from_rule(rule: dict, N: int) -> tuple[np.ndarray, np.ndarray]:
@@ -124,6 +231,21 @@ def _validate_config(config: LSRKHConvergenceConfig) -> None:
         raise ValueError("tf_values must be non-empty.")
     if any(tf <= 0.0 for tf in config.tf_values):
         raise ValueError("All tf values must be positive.")
+    projection_mode = str(config.projection_mode).strip().lower()
+    if projection_mode not in ("both", "pre", "post"):
+        raise ValueError("projection_mode must be one of: 'both', 'pre', 'post'.")
+    projection_frequency = str(config.projection_frequency).strip().lower()
+    if projection_frequency not in ("rhs", "step"):
+        raise ValueError("projection_frequency must be one of: 'rhs', 'step'.")
+    q_boundary_correction_mode = str(config.q_boundary_correction_mode).strip().lower()
+    if q_boundary_correction_mode not in ("inflow", "boundary", "all"):
+        raise ValueError("q_boundary_correction_mode must be one of: 'inflow', 'boundary', 'all'.")
+    if config.q_boundary_correction is not None and (not callable(config.q_boundary_correction)):
+        raise ValueError("q_boundary_correction must be callable or None.")
+    if config.use_sinx_rk_stage_boundary_correction and config.q_boundary_correction is not None:
+        raise ValueError(
+            "Use either use_sinx_rk_stage_boundary_correction=True or q_boundary_correction callable, not both."
+        )
 
 
 def run_lsrk_h_convergence_for_tf(
@@ -132,12 +254,17 @@ def run_lsrk_h_convergence_for_tf(
 ) -> list[dict]:
     _validate_config(config)
 
+    projection_mode = str(config.projection_mode).strip().lower()
+    projection_frequency = str(config.projection_frequency).strip().lower()
+
     rule = load_table1_rule(config.order)
     trace = build_trace_policy(rule)
     Dr, Ds = build_reference_diff_operators_from_rule(rule, config.N)
     projector = None
+    projector_t = None
     if config.enforce_polynomial_projection:
         projector = build_polynomial_l2_projector_from_rule(rule, config.N)
+        projector_t = np.ascontiguousarray(projector.T, dtype=float)
 
     results: list[dict] = []
 
@@ -155,17 +282,53 @@ def run_lsrk_h_convergence_for_tf(
         X, Y = map_reference_nodes_to_all_elements(rule["rs"], VX, VY, EToV)
 
         q0 = q_exact_sinx(X, Y, t=0.0)
-        if projector is not None:
-            q0 = q0 @ projector.T
+        if projector_t is not None:
+            q0_proj = np.empty_like(q0)
+            np.matmul(q0, projector_t, out=q0_proj)
+            q0 = q0_proj
 
         u_elem, v_elem = velocity_one_one(X, Y, t=0.0)
 
         geom = affine_geometric_factors_from_mesh(VX, VY, EToV, rule["rs"])
         face_geom = affine_face_geometry_from_mesh(VX, VY, EToV, trace)
+        volume_split_cache = build_volume_split_cache(
+            u_elem=u_elem,
+            v_elem=v_elem,
+            Dr=Dr,
+            Ds=Ds,
+            geom=geom,
+        )
+        surface_cache = None
+        if config.use_surface_cache:
+            surface_cache = build_surface_exchange_cache(
+                rule=rule,
+                trace=trace,
+                conn=conn,
+                face_geom=face_geom,
+            )
+
+        ndotV_precomputed = np.ascontiguousarray(
+            np.asarray(face_geom["nx"], dtype=float) + np.asarray(face_geom["ny"], dtype=float),
+            dtype=float,
+        )
+        ndotV_flat_precomputed = np.ascontiguousarray(
+            ndotV_precomputed.reshape(-1, int(trace["nfp"])),
+            dtype=float,
+        )
 
         hmin = mesh_min_altitude(VX, VY, EToV)
         vmax = vmax_from_uv(u_elem, v_elem)
         dt_nominal = cfl_dt_from_h(cfl=config.cfl, h=hmin, N=config.N, vmax=vmax)
+
+        q_boundary_correction = config.q_boundary_correction
+        q_boundary_correction_kind = "none"
+        if config.use_sinx_rk_stage_boundary_correction:
+            q_boundary_correction = build_sinx_rk_stage_boundary_correction(dt=dt_nominal)
+            q_boundary_correction_kind = "sinx_rk_stage"
+        elif q_boundary_correction is not None:
+            q_boundary_correction_kind = "custom"
+
+        projector_for_rhs_t = projector_t if (projector_t is not None and projection_frequency == "rhs") else None
 
         def rhs(t: float, q: np.ndarray) -> np.ndarray:
             total_rhs, _ = rhs_split_conservative_exchange(
@@ -186,9 +349,29 @@ def run_lsrk_h_convergence_for_tf(
                 compute_mismatches=False,
                 return_diagnostics=False,
                 use_numba=config.use_numba,
-                state_projector=projector,
+                state_projector_T=projector_for_rhs_t,
+                state_projector_mode=projection_mode,
+                surface_backend=config.surface_backend,
+                surface_cache=surface_cache,
+                ndotV_precomputed=ndotV_precomputed,
+                ndotV_flat_precomputed=ndotV_flat_precomputed,
+                volume_split_cache=volume_split_cache,
+                q_boundary_correction=q_boundary_correction,
+                q_boundary_correction_mode=config.q_boundary_correction_mode,
             )
             return total_rhs
+
+        post_step_transform = None
+        if projector_t is not None and projection_frequency == "step":
+            proj_buffers = (np.empty_like(q0), np.empty_like(q0))
+            proj_buffer_idx = 0
+
+            def post_step_transform(t_step: float, q_step: np.ndarray) -> np.ndarray:
+                nonlocal proj_buffer_idx
+                out = proj_buffers[proj_buffer_idx]
+                proj_buffer_idx = 1 - proj_buffer_idx
+                np.matmul(q_step, projector_t, out=out)
+                return out
 
         qf, tf_used, nsteps = integrate_lsrk54(
             rhs=rhs,
@@ -196,6 +379,7 @@ def run_lsrk_h_convergence_for_tf(
             t0=0.0,
             tf=float(tf),
             dt=dt_nominal,
+            post_step_transform=post_step_transform,
         )
 
         tf_target = float(tf)
@@ -241,6 +425,10 @@ def run_lsrk_h_convergence_for_tf(
             "Linf_error_at_stop": float(Linf_error_at_stop),
             "elapsed_sec": float(elapsed),
             "projection_enabled": bool(projector is not None),
+            "projection_mode": projection_mode,
+            "projection_frequency": projection_frequency,
+            "q_boundary_correction_kind": q_boundary_correction_kind,
+            "q_boundary_correction_mode": str(config.q_boundary_correction_mode).strip().lower(),
         }
         results.append(row)
 
@@ -275,6 +463,34 @@ def run_lsrk_h_convergence(config: LSRKHConvergenceConfig) -> dict[float, list[d
     for tf in config.tf_values:
         out[float(tf)] = run_lsrk_h_convergence_for_tf(config, tf=float(tf))
     return out
+
+
+def run_lsrk_h_convergence_compare_qb_correction(
+    config: LSRKHConvergenceConfig,
+) -> dict[str, dict[float, list[dict]]]:
+    """
+    One-click comparison for no-correction vs notebook-style RK-stage qB correction.
+    """
+    if config.q_boundary_correction is not None:
+        raise ValueError(
+            "run_lsrk_h_convergence_compare_qb_correction requires q_boundary_correction=None."
+        )
+
+    baseline_config = replace(
+        config,
+        use_sinx_rk_stage_boundary_correction=False,
+        q_boundary_correction=None,
+    )
+    rkstage_config = replace(
+        config,
+        use_sinx_rk_stage_boundary_correction=True,
+        q_boundary_correction=None,
+    )
+
+    return {
+        "baseline": run_lsrk_h_convergence(baseline_config),
+        "rk_stage_correction": run_lsrk_h_convergence(rkstage_config),
+    }
 
 
 def print_results_table(results: list[dict], title: str | None = None) -> None:

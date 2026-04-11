@@ -306,4 +306,5 @@ def interior_face_pair_mismatches(
                 "max_abs_mismatch": float(np.max(np.abs(diff))),
             }
         )
+    
     return out

@@ -182,8 +182,43 @@ python -m demo.advanced.demo_split_gaussian_field
 python -m demo.experiments.run_field_h_convergence
 python -m demo.experiments.run_div_h_convergence
 python -m demo.experiments.run_rhs_exchange_benchmark
-python -m demo.experiments.run_lsrk_h_convergence
+python -m demo.experiments.run_lsrk_h_convergence --preset quick
+python -m demo.experiments.run_lsrk_h_convergence --preset full
+python -m demo.experiments.run_lsrk_h_convergence --preset quick --compare-qb-correction
+python -m demo.experiments.run_lsrk_h_convergence --preset quick --qb-correction-only
 ```
+
+### LSRK qB Boundary Correction Modes
+
+The LSRK experiment runner now supports boundary-trace correction workflows
+for qB in the exchange path.
+
+- Baseline (no correction):
+
+```bash
+python -m demo.experiments.run_lsrk_h_convergence --preset quick
+```
+
+- Side-by-side compare (baseline vs RK-stage qB correction):
+
+```bash
+python -m demo.experiments.run_lsrk_h_convergence --preset quick --compare-qb-correction
+```
+
+- Correction-only run (only RK-stage qB correction):
+
+```bash
+python -m demo.experiments.run_lsrk_h_convergence --preset quick --qb-correction-only
+```
+
+Implementation notes:
+
+- Built-in notebook-style stage correction can be enabled through
+    `use_sinx_rk_stage_boundary_correction=True`.
+- Custom correction callbacks are supported through `q_boundary_correction`.
+- Correction application mode is controlled by `q_boundary_correction_mode`
+    with values: `inflow`, `boundary`, `all`.
+- Compare mode writes separate baseline and corrected CSV outputs.
 
 ## Demo Migration Map
 

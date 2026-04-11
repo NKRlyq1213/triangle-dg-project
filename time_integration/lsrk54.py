@@ -32,6 +32,37 @@ RK4C = np.array([
 ], dtype=float)
 
 
+def _lsrk54_step_inplace(rhs, t: float, q: np.ndarray, dt: float, res: np.ndarray) -> None:
+    """
+    In-place 5-stage LSRK54 update on q using reusable residual buffer.
+
+    Parameters
+    ----------
+    rhs : callable
+        rhs(t, q) -> dqdt, same shape as q
+    t : float
+        Current time
+    q : np.ndarray
+        State, updated in place
+    dt : float
+        Time step
+    res : np.ndarray
+        Residual workspace, same shape as q
+    """
+    res.fill(0.0)
+
+    for s in range(5):
+        t_stage = t + RK4C[s] * dt
+        dqdt = np.asarray(rhs(t_stage, q), dtype=float)
+
+        if dqdt.shape != q.shape:
+            raise ValueError("rhs(t, q) must return the same shape as q.")
+
+        res *= RK4A[s]
+        res += dt * dqdt
+        q += RK4B[s] * res
+
+
 def lsrk54_step(rhs, t: float, q: np.ndarray, dt: float) -> np.ndarray:
     """
     One step of 5-stage 4th-order low-storage RK.
@@ -52,20 +83,10 @@ def lsrk54_step(rhs, t: float, q: np.ndarray, dt: float) -> np.ndarray:
     np.ndarray
         Updated state after one full LSRK54 step
     """
-    q = np.asarray(q, dtype=float).copy()
-    res = np.zeros_like(q)
-
-    for s in range(5):
-        t_stage = t + RK4C[s] * dt
-        dqdt = np.asarray(rhs(t_stage, q), dtype=float)
-
-        if dqdt.shape != q.shape:
-            raise ValueError("rhs(t, q) must return the same shape as q.")
-
-        res = RK4A[s] * res + dt * dqdt
-        q = q + RK4B[s] * res
-
-    return q
+    q_out = np.asarray(q, dtype=float).copy()
+    res = np.zeros_like(q_out)
+    _lsrk54_step_inplace(rhs=rhs, t=t, q=q_out, dt=dt, res=res)
+    return q_out
 
 
 def integrate_lsrk54(
@@ -75,6 +96,7 @@ def integrate_lsrk54(
     tf: float,
     dt: float | None = None,
     dt_getter=None,
+    post_step_transform=None,
     max_steps: int = 10_000_000,
 ) -> tuple[np.ndarray, float, int]:
     """
@@ -99,8 +121,14 @@ def integrate_lsrk54(
     -----
     A simple blow-up guard is applied: if max(abs(q)) > 1000
     after a step, integration stops early.
+
+    If provided, post_step_transform is applied after each accepted full
+    LSRK step as:
+        q <- post_step_transform(t, q)
+    where t is the updated time after the step.
     """
     q = np.asarray(q0, dtype=float).copy()
+    q_shape = q.shape
 
     if tf < t0:
         raise ValueError("Require tf >= t0.")
@@ -113,23 +141,74 @@ def integrate_lsrk54(
     if np.isclose(tf, t0, atol=1e-15, rtol=1e-15):
         return q, t, nsteps
 
+    res = np.zeros_like(q)
+
+    if dt_getter is None:
+        dt_nominal = float(dt)
+        if dt_nominal <= 0.0:
+            raise ValueError("Time step must be positive.")
+
+        tol = 1e-15 * max(1.0, abs(tf))
+        remaining = tf - t
+        n_full = int(remaining / dt_nominal)
+
+        if nsteps + n_full > max_steps:
+            raise RuntimeError("Maximum number of steps exceeded in integrate_lsrk54.")
+
+        for _ in range(n_full):
+            _lsrk54_step_inplace(rhs=rhs, t=t, q=q, dt=dt_nominal, res=res)
+            t += dt_nominal
+            nsteps += 1
+
+            if post_step_transform is not None:
+                q = np.asarray(post_step_transform(t, q), dtype=float)
+                if q.shape != q_shape:
+                    raise ValueError("post_step_transform(t, q) must preserve state shape.")
+
+            if np.max(np.abs(q)) > BLOWUP_BREAK_ABS:
+                return q, t, nsteps
+
+        if (tf - t) > tol:
+            if nsteps >= max_steps:
+                raise RuntimeError("Maximum number of steps exceeded in integrate_lsrk54.")
+
+            dt_step = tf - t
+            _lsrk54_step_inplace(rhs=rhs, t=t, q=q, dt=dt_step, res=res)
+            t += dt_step
+            nsteps += 1
+
+            if post_step_transform is not None:
+                q = np.asarray(post_step_transform(t, q), dtype=float)
+                if q.shape != q_shape:
+                    raise ValueError("post_step_transform(t, q) must preserve state shape.")
+
+            if np.max(np.abs(q)) > BLOWUP_BREAK_ABS:
+                return q, t, nsteps
+
+        if abs(tf - t) <= tol:
+            t = float(tf)
+
+        return q, t, nsteps
+
     while t < tf:
         if nsteps >= max_steps:
             raise RuntimeError("Maximum number of steps exceeded in integrate_lsrk54.")
 
-        if dt_getter is None:
-            dt_nominal = float(dt)
-        else:
-            dt_nominal = float(dt_getter(t, q))
+        dt_nominal = float(dt_getter(t, q))
 
         if dt_nominal <= 0.0:
             raise ValueError("Time step must be positive.")
 
         dt_step = min(dt_nominal, tf - t)
 
-        q = lsrk54_step(rhs, t, q, dt_step)
+        _lsrk54_step_inplace(rhs=rhs, t=t, q=q, dt=dt_step, res=res)
         t += dt_step
         nsteps += 1
+
+        if post_step_transform is not None:
+            q = np.asarray(post_step_transform(t, q), dtype=float)
+            if q.shape != q_shape:
+                raise ValueError("post_step_transform(t, q) must preserve state shape.")
 
         if np.max(np.abs(q)) > BLOWUP_BREAK_ABS:
             break
