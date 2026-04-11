@@ -18,6 +18,11 @@ dependencies = [
     "pytest>=7.4"
 ]
 
+[project.optional-dependencies]
+perf = [
+    "numba>=0.60"
+]
+
 [tool.setuptools]
 include-package-data = false
 

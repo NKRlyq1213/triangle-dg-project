@@ -3,6 +3,9 @@ from __future__ import annotations
 import numpy as np
 
 
+BLOWUP_BREAK_ABS = 1000.0
+
+
 # 5-stage, 4th-order low-storage Runge-Kutta coefficients
 RK4A = np.array([
     0.0,
@@ -91,6 +94,11 @@ def integrate_lsrk54(
     -------
     tuple
         (qf, tf_used, nsteps)
+
+    Notes
+    -----
+    A simple blow-up guard is applied: if max(abs(q)) > 1000
+    after a step, integration stops early.
     """
     q = np.asarray(q0, dtype=float).copy()
 
@@ -122,6 +130,9 @@ def integrate_lsrk54(
         q = lsrk54_step(rhs, t, q, dt_step)
         t += dt_step
         nsteps += 1
+
+        if np.max(np.abs(q)) > BLOWUP_BREAK_ABS:
+            break
 
         # protect against roundoff stalling very near tf
         if abs(tf - t) <= 1e-15 * max(1.0, abs(tf)):

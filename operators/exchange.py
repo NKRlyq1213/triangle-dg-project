@@ -1,16 +1,64 @@
 from __future__ import annotations
 
+import importlib
 import numpy as np
 
-from operators.trace_policy import (
-    evaluate_embedded_face_values,
-    evaluate_projected_face_values,
-)
+try:
+    njit = importlib.import_module("numba").njit
+
+    _NUMBA_AVAILABLE = True
+except Exception:  # pragma: no cover - optional dependency
+    njit = None
+    _NUMBA_AVAILABLE = False
+
+def _should_use_numba(use_numba: bool | None) -> bool:
+    if use_numba is None:
+        return _NUMBA_AVAILABLE
+    return bool(use_numba) and _NUMBA_AVAILABLE
+
+
+if _NUMBA_AVAILABLE:
+    @njit(cache=True)
+    def _pair_face_traces_kernel_inplace(
+        uM: np.ndarray,
+        EToE: np.ndarray,
+        EToF: np.ndarray,
+        is_boundary: np.ndarray,
+        face_flip: np.ndarray,
+        boundary_fill_value: float,
+        uP: np.ndarray,
+    ) -> None:
+        K = uM.shape[0]
+        nfp = uM.shape[2]
+
+        for k in range(K):
+            for jf in range(3):
+                for i in range(nfp):
+                    uP[k, jf, i] = boundary_fill_value
+
+        for k in range(K):
+            for jf in range(3):
+                if is_boundary[k, jf]:
+                    continue
+
+                nbr = EToE[k, jf]
+                nbr_jf = EToF[k, jf] - 1
+
+                if face_flip[k, jf]:
+                    for i in range(nfp):
+                        uP[k, jf, i] = uM[nbr, nbr_jf, nfp - 1 - i]
+                else:
+                    for i in range(nfp):
+                        uP[k, jf, i] = uM[nbr, nbr_jf, i]
+
+else:
+    _pair_face_traces_kernel_inplace = None
 
 
 def evaluate_all_face_values(
     u_elem: np.ndarray,
     trace: dict,
+    out: np.ndarray | None = None,
 ) -> np.ndarray:
     """
     Evaluate all local face traces for all elements.
@@ -36,29 +84,37 @@ def evaluate_all_face_values(
 
     K = u_elem.shape[0]
     nfp = int(trace["nfp"])
-    out = np.zeros((K, 3, nfp), dtype=float)
+    if out is None:
+        out = np.zeros((K, 3, nfp), dtype=float)
+    else:
+        out = np.asarray(out, dtype=float)
+        if out.shape != (K, 3, nfp):
+            raise ValueError("out must have shape (K, 3, Nfp) matching u_elem and trace['nfp'].")
 
     mode = str(trace.get("trace_mode", "")).lower().strip()
 
-    for k in range(K):
-        uk = u_elem[k]
-
-        if mode == "embedded":
-            fvals = evaluate_embedded_face_values(uk, trace)
-        elif mode == "projected":
-            fvals = evaluate_projected_face_values(uk, trace)
-        else:
-            raise ValueError("trace['trace_mode'] must be 'embedded' or 'projected'.")
-
+    if mode == "embedded":
         for face_id in (1, 2, 3):
-            vals = np.asarray(fvals[face_id], dtype=float).reshape(-1)
-            if vals.size != nfp:
+            ids = np.asarray(trace["face_node_ids"][face_id], dtype=int).reshape(-1)
+            if ids.size != nfp:
                 raise ValueError(
-                    f"Face {face_id} of element {k} has {vals.size} values, expected {nfp}."
+                    f"Face {face_id} has {ids.size} trace nodes, expected {nfp}."
                 )
-            out[k, face_id - 1, :] = vals
+            out[:, face_id - 1, :] = u_elem[:, ids]
+        return out
 
-    return out
+    if mode == "projected":
+        for face_id in (1, 2, 3):
+            E_edge = np.asarray(trace["face_operators"][face_id], dtype=float)
+            vals = u_elem @ E_edge.T
+            if vals.shape != (K, nfp):
+                raise ValueError(
+                    f"Projected face {face_id} produced shape {vals.shape}, expected {(K, nfp)}."
+                )
+            out[:, face_id - 1, :] = vals
+        return out
+
+    raise ValueError("trace['trace_mode'] must be 'embedded' or 'projected'.")
 
 
 def unique_interior_face_pairs(conn: dict) -> list[tuple[int, int, int, int]]:
@@ -115,6 +171,9 @@ def pair_face_traces(
     conn: dict,
     trace: dict,
     boundary_fill_value: float = np.nan,
+    out_uM: np.ndarray | None = None,
+    out_uP: np.ndarray | None = None,
+    use_numba: bool | None = None,
 ) -> dict:
     """
     Pair local face traces with neighbor-aligned face traces.
@@ -163,24 +222,42 @@ def pair_face_traces(
     if face_flip.shape != EToE.shape:
         raise ValueError("conn['face_flip'] shape must match (K, 3).")
 
-    uM = evaluate_all_face_values(u_elem, trace)
-    uP = np.full_like(uM, fill_value=boundary_fill_value, dtype=float)
+    uM = evaluate_all_face_values(u_elem, trace, out=out_uM)
 
-    K, _, nfp = uM.shape
+    if out_uP is None:
+        uP = np.empty_like(uM, dtype=float)
+    else:
+        uP = np.asarray(out_uP, dtype=float)
+        if uP.shape != uM.shape:
+            raise ValueError("out_uP must have the same shape as evaluated traces (K, 3, Nfp).")
 
-    for k in range(K):
-        for jf in range(3):
-            if is_boundary[k, jf]:
-                continue
+    if _should_use_numba(use_numba):
+        _pair_face_traces_kernel_inplace(
+            uM=uM,
+            EToE=EToE,
+            EToF=EToF,
+            is_boundary=is_boundary,
+            face_flip=face_flip,
+            boundary_fill_value=float(boundary_fill_value),
+            uP=uP,
+        )
+    else:
+        uP.fill(float(boundary_fill_value))
 
-            nbr = int(EToE[k, jf])
-            nbr_f = int(EToF[k, jf])  # 1-based
-            vals = uM[nbr, nbr_f - 1, :].copy()
+        interior = ~is_boundary
+        if np.any(interior):
+            k_idx, jf_idx = np.where(interior)
+            nbr = EToE[k_idx, jf_idx]
+            nbr_jf = EToF[k_idx, jf_idx] - 1
 
-            if face_flip[k, jf]:
-                vals = vals[::-1]
+            gathered = uM[nbr, nbr_jf, :]
+            uP[k_idx, jf_idx, :] = gathered
 
-            uP[k, jf, :] = vals
+            flip_mask = face_flip[k_idx, jf_idx]
+            if np.any(flip_mask):
+                kf = k_idx[flip_mask]
+                jff = jf_idx[flip_mask]
+                uP[kf, jff, :] = uP[kf, jff, ::-1]
 
     return {
         "uM": uM,

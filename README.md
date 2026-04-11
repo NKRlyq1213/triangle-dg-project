@@ -95,6 +95,12 @@ Optional editable install:
 pip install -e .
 ```
 
+Optional performance extra (Numba backend for RHS exchange kernels):
+
+```bash
+pip install -e .[perf]
+```
+
 ## Quick Examples
 
 ### Load a quadrature rule
@@ -175,6 +181,8 @@ python -m demo.advanced.demo_split_gaussian_field
 ```bash
 python -m demo.experiments.run_field_h_convergence
 python -m demo.experiments.run_div_h_convergence
+python -m demo.experiments.run_rhs_exchange_benchmark
+python -m demo.experiments.run_lsrk_h_convergence
 ```
 
 ## Demo Migration Map

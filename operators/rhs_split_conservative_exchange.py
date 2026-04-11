@@ -1,12 +1,61 @@
 from __future__ import annotations
 
+import importlib
 import numpy as np
+
+try:
+    njit = importlib.import_module("numba").njit
+
+    _NUMBA_AVAILABLE = True
+except Exception:  # pragma: no cover - optional dependency
+    njit = None
+    _NUMBA_AVAILABLE = False
 
 from operators.divergence_split import mapped_divergence_split_2d
 from operators.exchange import (
     pair_face_traces,
     interior_face_pair_mismatches,
 )
+
+
+def _should_use_numba(use_numba: bool | None) -> bool:
+    if use_numba is None:
+        return _NUMBA_AVAILABLE
+    return bool(use_numba) and _NUMBA_AVAILABLE
+
+
+if _NUMBA_AVAILABLE:
+    @njit(cache=True)
+    def _surface_rhs_kernel_inplace(
+        p: np.ndarray,
+        area: np.ndarray,
+        length: np.ndarray,
+        ids_f1: np.ndarray,
+        ids_f2: np.ndarray,
+        ids_f3: np.ndarray,
+        wr_f1: np.ndarray,
+        wr_f2: np.ndarray,
+        wr_f3: np.ndarray,
+        surface_rhs: np.ndarray,
+    ) -> None:
+        K = p.shape[0]
+        nfp = p.shape[2]
+
+        for k in range(K):
+            s1 = length[k, 0] / area[k]
+            for i in range(nfp):
+                surface_rhs[k, ids_f1[i]] += s1 * wr_f1[i] * p[k, 0, i]
+
+            s2 = length[k, 1] / area[k]
+            for i in range(nfp):
+                surface_rhs[k, ids_f2[i]] += s2 * wr_f2[i] * p[k, 1, i]
+
+            s3 = length[k, 2] / area[k]
+            for i in range(nfp):
+                surface_rhs[k, ids_f3[i]] += s3 * wr_f3[i] * p[k, 2, i]
+
+else:
+    _surface_rhs_kernel_inplace = None
 
 
 def volume_term_split_conservative(
@@ -173,6 +222,9 @@ def surface_term_from_exchange(
     velocity,
     t: float = 0.0,
     tau: float = 0.0,
+    compute_mismatches: bool = True,
+    return_diagnostics: bool = True,
+    use_numba: bool | None = None,
 ) -> tuple[np.ndarray, dict]:
     """
     Surface term using actual interior face exchange plus exact inflow boundary data.
@@ -194,6 +246,7 @@ def surface_term_from_exchange(
         conn=conn,
         trace=trace,
         boundary_fill_value=np.nan,
+        use_numba=use_numba,
     )
 
     qM = np.asarray(paired["uM"], dtype=float)
@@ -227,22 +280,82 @@ def surface_term_from_exchange(
         qP=qP_filled,
     )
     ws = np.asarray(rule["ws"], dtype=float).reshape(-1)
+    inv_ws = 1.0 / ws
 
     K, Np = q_elem.shape
     surface_rhs = np.zeros((K, Np), dtype=float)
 
-    for k in range(K):
-        Ak = float(face_geom["area"][k])
+    area = np.asarray(face_geom["area"], dtype=float).reshape(-1)
+    length = np.asarray(face_geom["length"], dtype=float)
 
+    face_node_ids = {
+        face_id: np.asarray(trace["face_node_ids"][face_id], dtype=int).reshape(-1)
+        for face_id in (1, 2, 3)
+    }
+    face_weight_over_ws = {
+        face_id: np.asarray(trace["face_weights"][face_id], dtype=float).reshape(-1)
+        * inv_ws[face_node_ids[face_id]]
+        for face_id in (1, 2, 3)
+    }
+
+    should_use_numba = _should_use_numba(use_numba)
+    nfp = p.shape[2]
+
+    if should_use_numba:
+        ids_f1 = np.ascontiguousarray(face_node_ids[1], dtype=np.int64)
+        ids_f2 = np.ascontiguousarray(face_node_ids[2], dtype=np.int64)
+        ids_f3 = np.ascontiguousarray(face_node_ids[3], dtype=np.int64)
+
+        wr_f1 = np.ascontiguousarray(face_weight_over_ws[1], dtype=np.float64)
+        wr_f2 = np.ascontiguousarray(face_weight_over_ws[2], dtype=np.float64)
+        wr_f3 = np.ascontiguousarray(face_weight_over_ws[3], dtype=np.float64)
+
+        if (
+            ids_f1.size != nfp
+            or ids_f2.size != nfp
+            or ids_f3.size != nfp
+            or wr_f1.size != nfp
+            or wr_f2.size != nfp
+            or wr_f3.size != nfp
+        ):
+            raise ValueError("Trace face-node count must match p.shape[2].")
+
+        _surface_rhs_kernel_inplace(
+            p=np.ascontiguousarray(p, dtype=np.float64),
+            area=np.ascontiguousarray(area, dtype=np.float64),
+            length=np.ascontiguousarray(length, dtype=np.float64),
+            ids_f1=ids_f1,
+            ids_f2=ids_f2,
+            ids_f3=ids_f3,
+            wr_f1=wr_f1,
+            wr_f2=wr_f2,
+            wr_f3=wr_f3,
+            surface_rhs=surface_rhs,
+        )
+    else:
         for face_id in (1, 2, 3):
-            ids = np.asarray(trace["face_node_ids"][face_id], dtype=int)
-            we = np.asarray(trace["face_weights"][face_id], dtype=float).reshape(-1)
-            Lf = float(face_geom["length"][k, face_id - 1])
+            jf = face_id - 1
+            ids = face_node_ids[face_id]
+            w_ratio = face_weight_over_ws[face_id]
 
-            # |T|^{-1} W^{-1} E^T W^e p
-            surface_rhs[k, ids] += (Lf / Ak) * (we / ws[ids]) * p[k, face_id - 1, :]
+            if ids.size != p.shape[2] or w_ratio.size != p.shape[2]:
+                raise ValueError("Trace face-node count must match p.shape[2].")
 
-    mismatches = interior_face_pair_mismatches(paired)
+            # Batch form of |T|^{-1} W^{-1} E^T W^e p on one face for all elements.
+            scale = (length[:, jf] / area)[:, None]
+            face_contrib = scale * w_ratio[None, :] * p[:, jf, :]
+
+            if np.unique(ids).size == ids.size:
+                surface_rhs[:, ids] += face_contrib
+            else:
+                row_idx = np.broadcast_to(np.arange(K)[:, None], face_contrib.shape)
+                col_idx = np.broadcast_to(ids[None, :], face_contrib.shape)
+                np.add.at(surface_rhs, (row_idx, col_idx), face_contrib)
+
+    if not return_diagnostics:
+        return surface_rhs, {}
+
+    mismatches = interior_face_pair_mismatches(paired) if compute_mismatches else []
 
     diagnostics = {
         "qM": qM,
@@ -277,14 +390,28 @@ def rhs_split_conservative_exchange(
     velocity,
     t: float = 0.0,
     tau: float = 0.0,
+    compute_mismatches: bool = True,
+    return_diagnostics: bool = True,
+    use_numba: bool | None = None,
+    state_projector: np.ndarray | None = None,
 ) -> tuple[np.ndarray, dict]:
     """
     Full semi-discrete RHS using actual interior face exchange.
 
         RHS = volume_rhs + surface_rhs
     """
+    q_work = np.asarray(q_elem, dtype=float)
+    projector = None
+    if state_projector is not None:
+        projector = np.asarray(state_projector, dtype=float)
+        if projector.ndim != 2 or projector.shape[0] != projector.shape[1]:
+            raise ValueError("state_projector must be a square 2D array.")
+        if projector.shape[0] != q_work.shape[1]:
+            raise ValueError("state_projector size must match q_elem.shape[1].")
+        q_work = q_work @ projector.T
+
     volume_rhs = volume_term_split_conservative(
-        q_elem=q_elem,
+        q_elem=q_work,
         u_elem=u_elem,
         v_elem=v_elem,
         Dr=Dr,
@@ -293,7 +420,7 @@ def rhs_split_conservative_exchange(
     )
 
     surface_rhs, surface_diag = surface_term_from_exchange(
-        q_elem=q_elem,
+        q_elem=q_work,
         rule=rule,
         trace=trace,
         conn=conn,
@@ -302,9 +429,17 @@ def rhs_split_conservative_exchange(
         velocity=velocity,
         t=t,
         tau=tau,
+        compute_mismatches=compute_mismatches,
+        return_diagnostics=return_diagnostics,
+        use_numba=use_numba,
     )
 
     total_rhs = volume_rhs + surface_rhs
+    if projector is not None:
+        total_rhs = total_rhs @ projector.T
+
+    if not return_diagnostics:
+        return total_rhs, {}
 
     diagnostics = dict(surface_diag)
     diagnostics["volume_rhs"] = volume_rhs
