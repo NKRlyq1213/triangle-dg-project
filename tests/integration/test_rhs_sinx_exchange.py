@@ -90,7 +90,7 @@ def test_rhs_sinx_exchange_matches_qt():
     Dr, Ds = build_reference_diff_operators_from_rule(rule, N)
 
     # 2x2 square -> 8 triangles
-    VX, VY, EToV = structured_square_tri_mesh(nx=2, ny=2, diagonal="anti")
+    VX, VY, EToV = structured_square_tri_mesh(nx=16, ny=16, diagonal="anti")
 
     # actual interior exchange connectivity
     conn = build_face_connectivity(VX, VY, EToV, classify_boundary="box")
@@ -130,7 +130,7 @@ def test_rhs_sinx_exchange_matches_qt():
     total_rhs = diag["total_rhs"]
     p = diag["p"]
 
-    print(p)
+    # print(p)
     
     mismatches = diag["interior_mismatches"]
     max_interior_mismatch = 0.0 if len(mismatches) == 0 else max(

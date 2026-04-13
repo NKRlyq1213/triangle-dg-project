@@ -31,7 +31,7 @@ from operators.rhs_split_conservative_exchange import (
 )
 
 from time_integration.lsrk54 import integrate_lsrk54
-from time_integration.lsrk54 import RK4A, RK4B
+from time_integration.lsrk54 import RK4A, RK4B, RK4C
 from time_integration.CFL import mesh_min_altitude, cfl_dt_from_h, vmax_from_uv
 
 
@@ -44,17 +44,18 @@ class LSRKHConvergenceConfig:
     mesh_levels: tuple[int, ...] = (1, 2, 4, 8, 16, 32, 64, 128, 256)
 
     # Requested fixed setup from user:
-    # - q(x,y,t)=sin(x-t)
+    # - q(x,y,t)=sin(pi*(x-t))
     # - CFL=1
     # - final times tf=1 and tf=10
     cfl: float = 1.0
-    tf_values: tuple[float, ...] = (1.0, 10.0)
+    tf_values: tuple[float, ...] = (np.pi*2, np.pi*20)
 
     tau: float = 0.0
     use_numba: bool | None = True
     enforce_polynomial_projection: bool = True
     projection_mode: str = "post"
     projection_frequency: str = "step"
+    surface_inverse_mass_mode: str = "diagonal"
     surface_backend: str = "face-major"
     use_surface_cache: bool = True
     use_sinx_rk_stage_boundary_correction: bool = False
@@ -69,6 +70,9 @@ class SinxRKStageBoundaryCorrection:
 
     This tracks [g, g_t, g_tt] using the same low-storage RK coefficients and
     returns delta_qB = g_stage - g_exact(t_stage).
+
+    The effective step size is inferred from consecutive stage-call times,
+    so the correction remains consistent on the final short step.
     """
 
     def __init__(self, dt: float):
@@ -76,10 +80,13 @@ class SinxRKStageBoundaryCorrection:
         if dt <= 0.0:
             raise ValueError("dt must be positive for SinxRKStageBoundaryCorrection.")
 
-        self._dt = dt
+        self._dt_default = dt
         self._initialized = False
         self._stage = 0
         self._last_t = -np.inf
+        self._prev_t = 0.0
+        self._prev_stage = 0
+        self._have_prev_call = False
 
         self._g = None
         self._g_t = None
@@ -89,11 +96,11 @@ class SinxRKStageBoundaryCorrection:
         self._Kgtt = None
 
     def _reset(self, x_face: np.ndarray, t: float, expected_shape: tuple[int, int, int]) -> None:
-        phase = x_face - float(t)
+        phase = np.pi * (x_face - float(t))
 
         self._g = np.sin(phase)
-        self._g_t = -np.cos(phase)
-        self._g_tt = -np.sin(phase)
+        self._g_t = -np.pi * np.cos(phase)
+        self._g_tt = -(np.pi**2) * np.sin(phase)
 
         self._Kg = np.zeros(expected_shape, dtype=float)
         self._Kgt = np.zeros(expected_shape, dtype=float)
@@ -101,7 +108,49 @@ class SinxRKStageBoundaryCorrection:
 
         self._stage = 0
         self._last_t = float(t)
+        self._prev_t = float(t)
+        self._prev_stage = 0
+        self._have_prev_call = False
         self._initialized = True
+
+    def _infer_step_dt(
+        self,
+        *,
+        t_prev: float,
+        t_curr: float,
+        stage_prev: int,
+        stage_curr: int,
+    ) -> float:
+        c_prev = float(RK4C[stage_prev])
+        c_curr = float(RK4C[stage_curr])
+
+        if stage_curr > stage_prev:
+            frac = c_curr - c_prev
+        else:
+            frac = (1.0 - c_prev) + c_curr
+
+        if frac <= 0.0:
+            return float(self._dt_default)
+
+        dt_step = (float(t_curr) - float(t_prev)) / frac
+        if (not np.isfinite(dt_step)) or dt_step <= 0.0:
+            return float(self._dt_default)
+        return float(dt_step)
+
+    def _advance_one_stage(self, x_face: np.ndarray, *, t_stage: float, stage: int, dt_step: float) -> None:
+        g_ttt = (np.pi**3) * np.cos(np.pi * (x_face - float(t_stage)))
+
+        self._Kg *= RK4A[stage]
+        self._Kgt *= RK4A[stage]
+        self._Kgtt *= RK4A[stage]
+
+        self._Kg += dt_step * self._g_t
+        self._Kgt += dt_step * self._g_tt
+        self._Kgtt += dt_step * g_ttt
+
+        self._g += RK4B[stage] * self._Kg
+        self._g_t += RK4B[stage] * self._Kgt
+        self._g_tt += RK4B[stage] * self._Kgtt
 
     def __call__(
         self,
@@ -115,6 +164,7 @@ class SinxRKStageBoundaryCorrection:
     ) -> np.ndarray:
         del y_face, qM, ndotV, is_boundary
 
+        t = float(t)
         x_face = np.asarray(x_face, dtype=float)
         q_boundary_exact = np.asarray(q_boundary_exact, dtype=float)
 
@@ -127,27 +177,36 @@ class SinxRKStageBoundaryCorrection:
             or (self._g is None)
             or (self._g.shape != q_boundary_exact.shape)
         ):
-            self._reset(x_face=x_face, t=float(t), expected_shape=q_boundary_exact.shape)
+            self._reset(x_face=x_face, t=t, expected_shape=q_boundary_exact.shape)
+
+        if self._have_prev_call:
+            prev_stage = int(self._prev_stage)
+            curr_stage = int(self._stage)
+
+            if curr_stage != ((prev_stage + 1) % 5):
+                self._reset(x_face=x_face, t=t, expected_shape=q_boundary_exact.shape)
+            else:
+                dt_step = self._infer_step_dt(
+                    t_prev=float(self._prev_t),
+                    t_curr=t,
+                    stage_prev=prev_stage,
+                    stage_curr=curr_stage,
+                )
+                self._advance_one_stage(
+                    x_face=x_face,
+                    t_stage=float(self._prev_t),
+                    stage=prev_stage,
+                    dt_step=dt_step,
+                )
 
         delta = self._g - q_boundary_exact
 
-        s = self._stage
-        g_ttt = np.cos(x_face - float(t))
+        self._prev_t = t
+        self._prev_stage = int(self._stage)
+        self._have_prev_call = True
 
-        self._Kg *= RK4A[s]
-        self._Kgt *= RK4A[s]
-        self._Kgtt *= RK4A[s]
-
-        self._Kg += self._dt * self._g_t
-        self._Kgt += self._dt * self._g_tt
-        self._Kgtt += self._dt * g_ttt
-
-        self._g += RK4B[s] * self._Kg
-        self._g_t += RK4B[s] * self._Kgt
-        self._g_tt += RK4B[s] * self._Kgtt
-
-        self._stage = (s + 1) % 5
-        self._last_t = float(t)
+        self._stage = (self._stage + 1) % 5
+        self._last_t = t
 
         return delta
 
@@ -183,9 +242,21 @@ def build_polynomial_l2_projector_from_rule(rule: dict, N: int) -> np.ndarray:
     return V @ proj_modal
 
 
+def build_projected_inverse_mass_from_rule(rule: dict, N: int) -> np.ndarray:
+    projector = build_polynomial_l2_projector_from_rule(rule, N)
+    ws = np.asarray(rule["ws"], dtype=float).reshape(-1)
+    if projector.shape != (ws.size, ws.size):
+        raise ValueError("Projected inverse-mass size must be (Np, Np).")
+    if np.any(ws <= 0.0):
+        raise ValueError("rule['ws'] must be strictly positive.")
+
+    inv_ws = 1.0 / ws
+    return projector * inv_ws[None, :]
+
+
 def q_exact_sinx(x: np.ndarray, y: np.ndarray, t: float = 0.0) -> np.ndarray:
     x = np.asarray(x, dtype=float)
-    return np.sin(x - t)
+    return np.sin(np.pi * (x - t))
 
 
 def velocity_one_one(x: np.ndarray, y: np.ndarray, t: float = 0.0) -> tuple[np.ndarray, np.ndarray]:
@@ -237,6 +308,9 @@ def _validate_config(config: LSRKHConvergenceConfig) -> None:
     projection_frequency = str(config.projection_frequency).strip().lower()
     if projection_frequency not in ("rhs", "step"):
         raise ValueError("projection_frequency must be one of: 'rhs', 'step'.")
+    surface_inverse_mass_mode = str(config.surface_inverse_mass_mode).strip().lower()
+    if surface_inverse_mass_mode not in ("diagonal", "projected"):
+        raise ValueError("surface_inverse_mass_mode must be one of: 'diagonal', 'projected'.")
     q_boundary_correction_mode = str(config.q_boundary_correction_mode).strip().lower()
     if q_boundary_correction_mode not in ("inflow", "boundary", "all"):
         raise ValueError("q_boundary_correction_mode must be one of: 'inflow', 'boundary', 'all'.")
@@ -256,6 +330,7 @@ def run_lsrk_h_convergence_for_tf(
 
     projection_mode = str(config.projection_mode).strip().lower()
     projection_frequency = str(config.projection_frequency).strip().lower()
+    surface_inverse_mass_mode = str(config.surface_inverse_mass_mode).strip().lower()
 
     rule = load_table1_rule(config.order)
     trace = build_trace_policy(rule)
@@ -265,6 +340,11 @@ def run_lsrk_h_convergence_for_tf(
     if config.enforce_polynomial_projection:
         projector = build_polynomial_l2_projector_from_rule(rule, config.N)
         projector_t = np.ascontiguousarray(projector.T, dtype=float)
+
+    surface_inverse_mass_t = None
+    if surface_inverse_mass_mode == "projected":
+        surface_inverse_mass = build_projected_inverse_mass_from_rule(rule, config.N)
+        surface_inverse_mass_t = np.ascontiguousarray(surface_inverse_mass.T, dtype=float)
 
     results: list[dict] = []
 
@@ -356,6 +436,7 @@ def run_lsrk_h_convergence_for_tf(
                 ndotV_precomputed=ndotV_precomputed,
                 ndotV_flat_precomputed=ndotV_flat_precomputed,
                 volume_split_cache=volume_split_cache,
+                surface_inverse_mass_T=surface_inverse_mass_t,
                 q_boundary_correction=q_boundary_correction,
                 q_boundary_correction_mode=config.q_boundary_correction_mode,
             )
@@ -427,6 +508,7 @@ def run_lsrk_h_convergence_for_tf(
             "projection_enabled": bool(projector is not None),
             "projection_mode": projection_mode,
             "projection_frequency": projection_frequency,
+            "surface_inverse_mass_mode": surface_inverse_mass_mode,
             "q_boundary_correction_kind": q_boundary_correction_kind,
             "q_boundary_correction_mode": str(config.q_boundary_correction_mode).strip().lower(),
         }

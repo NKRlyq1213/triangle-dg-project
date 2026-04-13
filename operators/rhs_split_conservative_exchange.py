@@ -471,6 +471,7 @@ def build_surface_exchange_cache(
     inv_ws = 1.0 / ws
 
     ids_faces = []
+    we_faces = []
     wr_faces = []
     ids_unique = []
     nfp = int(trace["nfp"])
@@ -485,6 +486,7 @@ def build_surface_exchange_cache(
             raise ValueError("Trace face-weight count must match trace['nfp'].")
 
         ids_faces.append(ids)
+        we_faces.append(we)
         wr_faces.append(we * inv_ws[ids])
         ids_unique.append(np.unique(ids).size == ids.size)
 
@@ -595,6 +597,7 @@ def build_surface_exchange_cache(
         "is_boundary": is_boundary,
         "face_flip": face_flip,
         "ids_faces": tuple(ids_faces),
+        "we_faces": tuple(we_faces),
         "wr_faces": tuple(wr_faces),
         "ids_unique": tuple(ids_unique),
         "ids_faces_numba": ids_faces_numba,
@@ -624,9 +627,43 @@ def _lift_surface_penalty_to_volume(
     p: np.ndarray,
     cache: dict,
     use_numba: bool | None,
+    surface_inverse_mass_T: np.ndarray | None = None,
 ) -> np.ndarray:
     K = int(cache["K"])
     Np = int(cache["Np"])
+
+    if surface_inverse_mass_T is not None:
+        surface_inverse_mass_t = np.asarray(surface_inverse_mass_T, dtype=float)
+        if (
+            surface_inverse_mass_t.ndim != 2
+            or surface_inverse_mass_t.shape[0] != Np
+            or surface_inverse_mass_t.shape[1] != Np
+        ):
+            raise ValueError("surface_inverse_mass_T must be a square (Np, Np) array.")
+
+        ids_faces = cache["ids_faces"]
+        we_faces = cache["we_faces"]
+        ids_unique = cache["ids_unique"]
+        length = np.asarray(cache["length"], dtype=float)
+        area = np.asarray(cache["area"], dtype=float)
+
+        surface_integral = np.zeros((K, Np), dtype=float)
+        for jf in range(3):
+            ids = ids_faces[jf]
+            we = np.asarray(we_faces[jf], dtype=float)
+            face_contrib = length[:, jf][:, None] * we[None, :] * p[:, jf, :]
+
+            if ids_unique[jf]:
+                surface_integral[:, ids] += face_contrib
+            else:
+                row_idx = np.broadcast_to(np.arange(K)[:, None], face_contrib.shape)
+                col_idx = np.broadcast_to(ids[None, :], face_contrib.shape)
+                np.add.at(surface_integral, (row_idx, col_idx), face_contrib)
+
+        surface_rhs = surface_integral @ surface_inverse_mass_t
+        surface_rhs /= area[:, None]
+        return surface_rhs
+
     surface_rhs = np.zeros((K, Np), dtype=float)
 
     if _should_use_numba(use_numba):
@@ -696,6 +733,7 @@ def surface_term_from_exchange(
     surface_cache: dict | None = None,
     ndotV_precomputed: np.ndarray | None = None,
     ndotV_flat_precomputed: np.ndarray | None = None,
+    surface_inverse_mass_T: np.ndarray | None = None,
     q_boundary_correction=None,
     q_boundary_correction_mode: str = "inflow",
     volume_split_cache: dict | None = None,
@@ -776,7 +814,7 @@ def surface_term_from_exchange(
         )
 
     if backend == "face-major":
-        if _should_use_numba(use_numba) and (not return_diagnostics):
+        if _should_use_numba(use_numba) and (not return_diagnostics) and (surface_inverse_mass_T is None):
             surface_rhs = np.zeros((K, Np), dtype=float)
 
             if ndotV_flat_precomputed is None:
@@ -872,7 +910,12 @@ def surface_term_from_exchange(
 
         p = np.minimum(ndotV_flat, 0.0) * (qM_flat - qP_flat)
         p = p.reshape(K, 3, nfp)
-        surface_rhs = _lift_surface_penalty_to_volume(p, cache, use_numba=use_numba)
+        surface_rhs = _lift_surface_penalty_to_volume(
+            p,
+            cache,
+            use_numba=use_numba,
+            surface_inverse_mass_T=surface_inverse_mass_T,
+        )
 
         if not return_diagnostics:
             return surface_rhs, {}
@@ -935,7 +978,12 @@ def surface_term_from_exchange(
         qM=qM,
         qP=qP_filled,
     )
-    surface_rhs = _lift_surface_penalty_to_volume(p, cache, use_numba=use_numba)
+    surface_rhs = _lift_surface_penalty_to_volume(
+        p,
+        cache,
+        use_numba=use_numba,
+        surface_inverse_mass_T=surface_inverse_mass_T,
+    )
 
     if not return_diagnostics:
         return surface_rhs, {}
@@ -986,6 +1034,7 @@ def rhs_split_conservative_exchange(
     surface_cache: dict | None = None,
     ndotV_precomputed: np.ndarray | None = None,
     ndotV_flat_precomputed: np.ndarray | None = None,
+    surface_inverse_mass_T: np.ndarray | None = None,
     volume_split_cache: dict | None = None,
     q_boundary_correction=None,
     q_boundary_correction_mode: str = "inflow",
@@ -1053,6 +1102,7 @@ def rhs_split_conservative_exchange(
         surface_cache=surface_cache,
         ndotV_precomputed=ndotV_precomputed,
         ndotV_flat_precomputed=ndotV_flat_precomputed,
+        surface_inverse_mass_T=surface_inverse_mass_T,
         q_boundary_correction=q_boundary_correction,
         q_boundary_correction_mode=q_boundary_correction_mode,
     )

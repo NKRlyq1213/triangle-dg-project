@@ -44,8 +44,8 @@ def _check_all_interior_pairs_small(paired: dict, tol: float) -> None:
 
 def test_exchange_step3_table1_embedded_pairing() -> None:
     VX, VY, EToV = structured_square_tri_mesh(
-        nx=2,
-        ny=2,
+        nx=16,
+        ny=16,
         xlim=(0.0, 1.0),
         ylim=(0.0, 1.0),
         diagonal="anti",
@@ -69,8 +69,8 @@ def test_exchange_step3_table1_embedded_pairing() -> None:
 
 def test_exchange_step3_table2_projected_pairing() -> None:
     VX, VY, EToV = structured_square_tri_mesh(
-        nx=2,
-        ny=2,
+        nx=16,
+        ny=16,
         xlim=(0.0, 1.0),
         ylim=(0.0, 1.0),
         diagonal="anti",
@@ -80,7 +80,7 @@ def test_exchange_step3_table2_projected_pairing() -> None:
 
     rule = load_table2_rule(4)
     trace = build_trace_policy(rule, N=4, n_edge=5)
-
+    
     X, Y = map_reference_nodes_to_all_elements(rule["rs"], VX, VY, EToV)
     u_elem = _global_poly(X, Y)
 
@@ -90,3 +90,10 @@ def test_exchange_step3_table2_projected_pairing() -> None:
     assert np.all(np.isnan(paired["uP"][paired["is_boundary"]]))
 
     _check_all_interior_pairs_small(paired, tol=1e-12)
+
+if __name__ == "__main__":
+    test_exchange_step3_table1_embedded_pairing()
+    print("test_exchange_step3_table1_embedded_pairing passed.")
+
+    test_exchange_step3_table2_projected_pairing()
+    print("test_exchange_step3_table2_projected_pairing passed.")

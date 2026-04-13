@@ -20,13 +20,13 @@ def test_sinx_rk_stage_boundary_correction_callback_shape() -> None:
     ndotV = -np.ones_like(x_face)
     is_boundary = np.ones((1, 3), dtype=bool)
 
-    qB_exact_0 = np.sin(x_face - 0.0)
+    qB_exact_0 = np.sin(np.pi * (x_face - 0.0))
     delta0 = corr(x_face, y_face, 0.0, qM, ndotV, is_boundary, qB_exact_0)
 
     assert delta0.shape == qB_exact_0.shape
     assert np.all(np.isfinite(delta0))
 
-    qB_exact_1 = np.sin(x_face - 2.0e-3)
+    qB_exact_1 = np.sin(np.pi * (x_face - 2.0e-3))
     delta1 = corr(x_face, y_face, 2.0e-3, qM, ndotV, is_boundary, qB_exact_1)
 
     assert delta1.shape == qB_exact_1.shape

@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import replace
 from pathlib import Path
-
+import numpy as np
 from experiments.lsrk_h_convergence import (
     LSRKHConvergenceConfig,
     run_lsrk_h_convergence,
@@ -39,6 +39,30 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="run only notebook-style RK-stage qB correction (no baseline)",
     )
+    parser.add_argument(
+        "--surface-inverse-mass-mode",
+        choices=("diagonal", "projected"),
+        default="projected",
+        help="surface lifting inverse mass: projected (default) or diagonal",
+    )
+    parser.add_argument(
+        "--state-projection",
+        choices=("off", "on"),
+        default="off",
+        help="toggle polynomial state projection P on nodal state",
+    )
+    parser.add_argument(
+        "--projection-mode",
+        choices=("pre", "post", "both"),
+        default="post",
+        help="state projection application point inside RHS",
+    )
+    parser.add_argument(
+        "--projection-frequency",
+        choices=("rhs", "step"),
+        default="step",
+        help="apply state projection at each RHS call or each RK step",
+    )
     return parser.parse_args()
 
 
@@ -71,7 +95,16 @@ def _print_compare_summary(
         print(f"{n:6d} {l2_ratio:12.4f} {time_ratio:12.4f}")
 
 
-def _build_config(preset: str) -> LSRKHConvergenceConfig:
+def _build_config(
+    preset: str,
+    surface_inverse_mass_mode: str,
+    *,
+    state_projection: str,
+    projection_mode: str,
+    projection_frequency: str,
+) -> LSRKHConvergenceConfig:
+    projection_enabled = str(state_projection).strip().lower() == "on"
+
     if preset == "quick":
         return LSRKHConvergenceConfig(
             table_name="table1",
@@ -80,11 +113,13 @@ def _build_config(preset: str) -> LSRKHConvergenceConfig:
             diagonal="anti",
             mesh_levels=(1, 2, 4, 8, 16),
             cfl=1.0,
-            tf_values=(1.0,),
+            tf_values=(np.pi * 2,),
             tau=0.0,
             use_numba=True,
-            projection_mode="post",
-            projection_frequency="step",
+            enforce_polynomial_projection=projection_enabled,
+            projection_mode=projection_mode,
+            projection_frequency=projection_frequency,
+            surface_inverse_mass_mode=surface_inverse_mass_mode,
             surface_backend="face-major",
             use_surface_cache=True,
             verbose=False,
@@ -95,13 +130,15 @@ def _build_config(preset: str) -> LSRKHConvergenceConfig:
         order=4,
         N=4,
         diagonal="anti",
-        mesh_levels=(1, 2, 4, 8, 16, 32, 64),
+        mesh_levels=(1, 2, 4, 8, 16, 32),
         cfl=1.0,
-        tf_values=(1.0, 10.0),
+        tf_values=(np.pi * 2,),
         tau=0.0,
+        enforce_polynomial_projection=projection_enabled,
         use_numba=True,
-        projection_mode="post",
-        projection_frequency="step",
+        projection_mode=projection_mode,
+        projection_frequency=projection_frequency,
+        surface_inverse_mass_mode=surface_inverse_mass_mode,
         surface_backend="face-major",
         use_surface_cache=True,
         verbose=True,
@@ -117,7 +154,13 @@ def main() -> None:
     output_dir = Path(__file__).resolve().parents[2] / "experiments_outputs"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    config = _build_config(args.preset)
+    config = _build_config(
+        args.preset,
+        args.surface_inverse_mass_mode,
+        state_projection=args.state_projection,
+        projection_mode=args.projection_mode,
+        projection_frequency=args.projection_frequency,
+    )
 
     if args.qb_correction_only:
         config = replace(
@@ -126,6 +169,10 @@ def main() -> None:
             q_boundary_correction=None,
         )
     print(f"[run] preset={args.preset}")
+    print(f"[run] surface_inverse_mass_mode={config.surface_inverse_mass_mode}")
+    print(f"[run] state_projection={'on' if config.enforce_polynomial_projection else 'off'}")
+    print(f"[run] projection_mode={config.projection_mode}")
+    print(f"[run] projection_frequency={config.projection_frequency}")
 
     if args.compare_qb_correction:
         print("[run] compare_qb_correction=on")
