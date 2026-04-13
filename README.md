@@ -168,6 +168,8 @@ python -m demo.experiments.run_lsrk_h_convergence --preset quick
 python -m demo.experiments.run_lsrk_h_convergence --preset full
 python -m demo.experiments.run_lsrk_h_convergence --preset quick --compare-qb-correction
 python -m demo.experiments.run_lsrk_h_convergence --preset quick --qb-correction-only
+python -m demo.experiments.run_lsrk_h_convergence --preset quick --qb-correction-only --surface-inverse-mass-mode projected
+python -m demo.experiments.run_lsrk_h_convergence --preset quick --qb-correction-only --state-projection on --projection-mode both --projection-frequency rhs
 ```
 
 ## LSRK qB Correction Workflow
@@ -194,14 +196,20 @@ python -m demo.experiments.run_lsrk_h_convergence --preset quick --qb-correction
 
 Flag notes:
 
-- `--preset quick`: mesh_levels=(1,2,4,8,16), tf_values=(1.0,)
-- `--preset full`: mesh_levels=(1,2,4,8,16,32,64), tf_values=(1.0,10.0)
+- `--preset quick`: mesh_levels=(1,2,4,8,16), tf_values=(2*pi,)
+- `--preset full`: mesh_levels=(1,2,4,8,16,32), tf_values=(2*pi,)
 - `--compare-qb-correction` and `--qb-correction-only` are mutually exclusive
+- `--surface-inverse-mass-mode`: `projected` (default), `diagonal`
+- `--state-projection`: `off` (default), `on`
+- `--projection-mode`: `pre`, `post`, `both` (active when `--state-projection on`)
+- `--projection-frequency`: `rhs`, `step` (active when `--state-projection on`)
 
 Relevant `LSRKHConvergenceConfig` knobs in the backend:
 
+- `enforce_polynomial_projection`: enable/disable nodal state projection
 - `projection_mode`: `both`, `pre`, `post`
 - `projection_frequency`: `rhs`, `step`
+- `surface_inverse_mass_mode`: `projected`, `diagonal`
 - `surface_backend`: currently configured as `face-major` in the runner presets
 - `use_sinx_rk_stage_boundary_correction`: built-in notebook-style stage correction
 - `q_boundary_correction`: custom callback hook
@@ -229,7 +237,9 @@ LSRK mode-specific suffixes:
 
 LSRK CSV rows include mesh/time/error metrics and mode metadata such as:
 
+- `projection_enabled`
 - `projection_mode`, `projection_frequency`
+- `surface_inverse_mass_mode`
 - `q_boundary_correction_kind`, `q_boundary_correction_mode`
 
 ## Testing and Validation
