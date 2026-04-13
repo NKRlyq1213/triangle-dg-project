@@ -30,14 +30,20 @@ def _parse_args() -> argparse.Namespace:
         help="quick: faster sanity run, full: complete run",
     )
     parser.add_argument(
+        "--qb-correction",
+        choices=("off", "on", "compare"),
+        default=None,
+        help="qB mode: off=baseline, on=RK-stage qB correction only, compare=run baseline and correction",
+    )
+    parser.add_argument(
         "--compare-qb-correction",
         action="store_true",
-        help="run baseline and notebook-style RK-stage qB correction side-by-side",
+        help="legacy alias of --qb-correction compare",
     )
     parser.add_argument(
         "--qb-correction-only",
         action="store_true",
-        help="run only notebook-style RK-stage qB correction (no baseline)",
+        help="legacy alias of --qb-correction on",
     )
     parser.add_argument(
         "--surface-inverse-mass-mode",
@@ -112,7 +118,7 @@ def _build_config(
             N=4,
             diagonal="anti",
             mesh_levels=(1, 2, 4, 8, 16),
-            cfl=1.0,
+            cfl=0.1,
             tf_values=(np.pi * 2,),
             tau=0.0,
             use_numba=True,
@@ -145,11 +151,31 @@ def _build_config(
     )
 
 
+def _resolve_qb_mode(args: argparse.Namespace) -> str:
+    qb_mode = None if args.qb_correction is None else str(args.qb_correction).strip().lower()
+    legacy_compare = bool(args.compare_qb_correction)
+    legacy_on = bool(args.qb_correction_only)
+
+    if legacy_compare and legacy_on:
+        raise ValueError("Use only one of --compare-qb-correction or --qb-correction-only.")
+
+    if qb_mode is not None and (legacy_compare or legacy_on):
+        raise ValueError(
+            "Use either --qb-correction or legacy flags (--compare-qb-correction/--qb-correction-only), not both."
+        )
+
+    if qb_mode is not None:
+        return qb_mode
+    if legacy_compare:
+        return "compare"
+    if legacy_on:
+        return "on"
+    return "off"
+
+
 def main() -> None:
     args = _parse_args()
-
-    if args.compare_qb_correction and args.qb_correction_only:
-        raise ValueError("Use only one of --compare-qb-correction or --qb-correction-only.")
+    qb_mode = _resolve_qb_mode(args)
 
     output_dir = Path(__file__).resolve().parents[2] / "experiments_outputs"
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -162,7 +188,7 @@ def main() -> None:
         projection_frequency=args.projection_frequency,
     )
 
-    if args.qb_correction_only:
+    if qb_mode == "on":
         config = replace(
             config,
             use_sinx_rk_stage_boundary_correction=True,
@@ -170,11 +196,12 @@ def main() -> None:
         )
     print(f"[run] preset={args.preset}")
     print(f"[run] surface_inverse_mass_mode={config.surface_inverse_mass_mode}")
+    print(f"[run] qb_correction={qb_mode}")
     print(f"[run] state_projection={'on' if config.enforce_polynomial_projection else 'off'}")
     print(f"[run] projection_mode={config.projection_mode}")
     print(f"[run] projection_frequency={config.projection_frequency}")
 
-    if args.compare_qb_correction:
+    if qb_mode == "compare":
         print("[run] compare_qb_correction=on")
         compared = run_lsrk_h_convergence_compare_qb_correction(config)
 
@@ -214,7 +241,7 @@ def main() -> None:
             print("[OK] wrote " + str(csv_corrected))
         return
 
-    if args.qb_correction_only:
+    if qb_mode == "on":
         print("[run] qb_correction_only=on")
         all_results = run_lsrk_h_convergence(config)
 

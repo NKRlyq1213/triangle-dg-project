@@ -166,10 +166,10 @@ python -m demo.experiments.run_div_h_convergence
 python -m demo.experiments.run_rhs_exchange_benchmark
 python -m demo.experiments.run_lsrk_h_convergence --preset quick
 python -m demo.experiments.run_lsrk_h_convergence --preset full
-python -m demo.experiments.run_lsrk_h_convergence --preset quick --compare-qb-correction
-python -m demo.experiments.run_lsrk_h_convergence --preset quick --qb-correction-only
-python -m demo.experiments.run_lsrk_h_convergence --preset quick --qb-correction-only --surface-inverse-mass-mode projected
-python -m demo.experiments.run_lsrk_h_convergence --preset quick --qb-correction-only --state-projection on --projection-mode both --projection-frequency rhs
+python -m demo.experiments.run_lsrk_h_convergence --preset quick --qb-correction compare
+python -m demo.experiments.run_lsrk_h_convergence --preset quick --qb-correction on
+python -m demo.experiments.run_lsrk_h_convergence --preset quick --qb-correction on --surface-inverse-mass-mode projected
+python -m demo.experiments.run_lsrk_h_convergence --preset quick --qb-correction on --state-projection on --projection-mode both --projection-frequency rhs
 ```
 
 ## LSRK qB Correction Workflow
@@ -179,26 +179,27 @@ The LSRK runner supports three user-facing modes:
 - Baseline:
 
 ```bash
-python -m demo.experiments.run_lsrk_h_convergence --preset quick
+python -m demo.experiments.run_lsrk_h_convergence --preset quick --qb-correction off
 ```
 
 - Compare baseline vs correction:
 
 ```bash
-python -m demo.experiments.run_lsrk_h_convergence --preset quick --compare-qb-correction
+python -m demo.experiments.run_lsrk_h_convergence --preset quick --qb-correction compare
 ```
 
 - Correction-only:
 
 ```bash
-python -m demo.experiments.run_lsrk_h_convergence --preset quick --qb-correction-only
+python -m demo.experiments.run_lsrk_h_convergence --preset quick --qb-correction on
 ```
 
 Flag notes:
 
 - `--preset quick`: mesh_levels=(1,2,4,8,16), tf_values=(2*pi,)
 - `--preset full`: mesh_levels=(1,2,4,8,16,32), tf_values=(2*pi,)
-- `--compare-qb-correction` and `--qb-correction-only` are mutually exclusive
+- `--qb-correction`: `off` (baseline), `on` (rk-stage correction only), `compare` (run both)
+- legacy aliases are still supported: `--compare-qb-correction` and `--qb-correction-only`
 - `--surface-inverse-mass-mode`: `projected` (default), `diagonal`
 - `--state-projection`: `off` (default), `on`
 - `--projection-mode`: `pre`, `post`, `both` (active when `--state-projection on`)

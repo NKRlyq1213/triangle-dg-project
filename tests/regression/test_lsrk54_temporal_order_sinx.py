@@ -42,7 +42,7 @@ def q_exact_sinx(x: np.ndarray, y: np.ndarray, t: float = 0.0) -> np.ndarray:
 
 
 def velocity_one_one(x: np.ndarray, y: np.ndarray, t: float = 0.0) -> tuple[np.ndarray, np.ndarray]:
-    return np.ones_like(x), np.ones_like(y)
+    return np.ones_like(x), np.zeros_like(y)
 
 
 def weighted_l2_error(err: np.ndarray, rule: dict, face_geom: dict) -> float:
@@ -72,7 +72,7 @@ def solve_sinx_problem(cfl: float, tf: float):
     """
     Solve the exchange-based semi-discrete DG system with LSRK54 for
 
-        q = sin(x-t), V=(1,1),
+        q = sin(x-t), V=(1,0),
 
     using interior exchange with exact boundary data.
 
@@ -109,7 +109,7 @@ def solve_sinx_problem(cfl: float, tf: float):
 
     # constant velocity
     u_elem = np.ones_like(q0)
-    v_elem = np.ones_like(q0)
+    v_elem = np.zeros_like(q0)
 
     # geometry
     geom = affine_geometric_factors_from_mesh(VX, VY, EToV, rule["rs"])

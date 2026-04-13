@@ -46,7 +46,7 @@ class LSRKHConvergenceConfig:
     # Requested fixed setup from user:
     # - q(x,y,t)=sin(pi*(x-t))
     # - CFL=1
-    # - final times tf=1 and tf=10
+    # - final times tf=2*pi and tf=20*pi
     cfl: float = 1.0
     tf_values: tuple[float, ...] = (np.pi*2, np.pi*20)
 
@@ -262,7 +262,7 @@ def q_exact_sinx(x: np.ndarray, y: np.ndarray, t: float = 0.0) -> np.ndarray:
 def velocity_one_one(x: np.ndarray, y: np.ndarray, t: float = 0.0) -> tuple[np.ndarray, np.ndarray]:
     x = np.asarray(x, dtype=float)
     y = np.asarray(y, dtype=float)
-    return np.ones_like(x), np.ones_like(y)
+    return np.ones_like(x), np.zeros_like(y)
 
 
 def weighted_l2_error(err: np.ndarray, rule: dict, face_geom: dict) -> float:
@@ -387,8 +387,14 @@ def run_lsrk_h_convergence_for_tf(
                 face_geom=face_geom,
             )
 
+        u_face, v_face = velocity_one_one(
+            np.asarray(face_geom["x_face"], dtype=float),
+            np.asarray(face_geom["y_face"], dtype=float),
+            t=0.0,
+        )
         ndotV_precomputed = np.ascontiguousarray(
-            np.asarray(face_geom["nx"], dtype=float) + np.asarray(face_geom["ny"], dtype=float),
+            np.asarray(face_geom["nx"], dtype=float) * np.asarray(u_face, dtype=float)
+            + np.asarray(face_geom["ny"], dtype=float) * np.asarray(v_face, dtype=float),
             dtype=float,
         )
         ndotV_flat_precomputed = np.ascontiguousarray(
