@@ -168,7 +168,10 @@ python -m demo.experiments.run_lsrk_h_convergence --preset quick
 python -m demo.experiments.run_lsrk_h_convergence --preset full
 python -m demo.experiments.run_lsrk_h_convergence --preset quick --qb-correction compare
 python -m demo.experiments.run_lsrk_h_convergence --preset quick --qb-correction on
-python -m demo.experiments.run_lsrk_h_convergence --preset quick --qb-correction on --surface-inverse-mass-mode projected
+python -m demo.experiments.run_lsrk_h_convergence --preset quick --qb-correction off --surface-inverse-mass-mode diagonal --state-projection off
+python -m demo.experiments.run_lsrk_h_convergence --preset quick --test-function sin2pi_y
+python -m demo.experiments.run_lsrk_h_convergence --preset quick --test-function sin2pi_xy
+python -m demo.experiments.run_lsrk_h_convergence --preset quick --physical-boundary-mode opposite_boundary
 python -m demo.experiments.run_lsrk_h_convergence --preset quick --qb-correction on --state-projection on --projection-mode both --projection-frequency rhs
 ```
 
@@ -196,14 +199,18 @@ python -m demo.experiments.run_lsrk_h_convergence --preset quick --qb-correction
 
 Flag notes:
 
-- `--preset quick`: mesh_levels=(1,2,4,8,16), tf_values=(2*pi,)
-- `--preset full`: mesh_levels=(1,2,4,8,16,32), tf_values=(2*pi,)
+- `--preset quick`: mesh_levels=(1,2,4,8,16), tf_values=(1,)
+- `--preset full`: mesh_levels=(1,2,4,8,16,32), tf_values=(1,)
 - `--qb-correction`: `off` (baseline), `on` (rk-stage correction only), `compare` (run both)
 - legacy aliases are still supported: `--compare-qb-correction` and `--qb-correction-only`
-- `--surface-inverse-mass-mode`: `projected` (default), `diagonal`
+- `--surface-inverse-mass-mode`: `diagonal` (default), `projected`
 - `--state-projection`: `off` (default), `on`
 - `--projection-mode`: `pre`, `post`, `both` (active when `--state-projection on`)
 - `--projection-frequency`: `rhs`, `step` (active when `--state-projection on`)
+- `--test-function`: `sin2pi_x`, `sin2pi_y`, `sin2pi_xy`
+- `--physical-boundary-mode`: `exact_qb`, `opposite_boundary`
+    - `exact_qb`: physical boundary uses q_boundary callback (qB correction can apply)
+    - `opposite_boundary`: physical boundary uses opposite box boundary trace pairing (no qB correction applied)
 
 Relevant `LSRKHConvergenceConfig` knobs in the backend:
 
@@ -211,6 +218,8 @@ Relevant `LSRKHConvergenceConfig` knobs in the backend:
 - `projection_mode`: `both`, `pre`, `post`
 - `projection_frequency`: `rhs`, `step`
 - `surface_inverse_mass_mode`: `projected`, `diagonal`
+- `test_function_mode`: `sin2pi_x`, `sin2pi_y`, `sin2pi_xy`
+- `physical_boundary_mode`: `exact_qb`, `opposite_boundary`
 - `surface_backend`: currently configured as `face-major` in the runner presets
 - `use_sinx_rk_stage_boundary_correction`: built-in notebook-style stage correction
 - `q_boundary_correction`: custom callback hook

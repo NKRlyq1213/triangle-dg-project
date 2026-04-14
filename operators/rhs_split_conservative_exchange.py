@@ -452,6 +452,199 @@ def _apply_boundary_q_correction(
     return qB
 
 
+def _pair_boundary_faces_by_axis(
+    faces_a: list[tuple[int, int]],
+    faces_b: list[tuple[int, int]],
+    face_midpoints: np.ndarray,
+    *,
+    axis: int,
+    label_a: str,
+    label_b: str,
+    tol: float = 1e-12,
+) -> list[tuple[tuple[int, int], tuple[int, int], int]]:
+    if len(faces_a) != len(faces_b):
+        raise ValueError(
+            f"Boundary group size mismatch for opposite pairing: {label_a}={len(faces_a)}, {label_b}={len(faces_b)}."
+        )
+
+    if len(faces_a) == 0:
+        return []
+
+    def _coord(face: tuple[int, int]) -> float:
+        k, f = int(face[0]), int(face[1])
+        return float(face_midpoints[k, f - 1, axis])
+
+    left_sorted = sorted(((int(k), int(f)) for k, f in faces_a), key=_coord)
+    right_sorted = sorted(((int(k), int(f)) for k, f in faces_b), key=_coord)
+
+    pairs: list[tuple[tuple[int, int], tuple[int, int], int]] = []
+    for fa, fb in zip(left_sorted, right_sorted):
+        ca = _coord(fa)
+        cb = _coord(fb)
+        if not np.isclose(ca, cb, atol=tol, rtol=tol):
+            raise ValueError(
+                f"Opposite-boundary pairing mismatch between {label_a} and {label_b}: {ca} vs {cb}."
+            )
+        pairs.append((fa, fb, axis))
+    return pairs
+
+
+def _opposite_pair_needs_flip(
+    x_face: np.ndarray,
+    y_face: np.ndarray,
+    *,
+    ka: int,
+    fa: int,
+    kb: int,
+    fb: int,
+    axis: int,
+) -> bool:
+    if axis == 1:
+        a = np.asarray(y_face[ka, fa - 1, :], dtype=float)
+        b = np.asarray(y_face[kb, fb - 1, :], dtype=float)
+    else:
+        a = np.asarray(x_face[ka, fa - 1, :], dtype=float)
+        b = np.asarray(x_face[kb, fb - 1, :], dtype=float)
+
+    if a.size <= 1:
+        return False
+
+    d_same = float(np.max(np.abs(a - b)))
+    d_flip = float(np.max(np.abs(a - b[::-1])))
+    if np.isclose(d_same, d_flip, atol=1e-14, rtol=1e-12):
+        ax = float(x_face[ka, fa - 1, -1] - x_face[ka, fa - 1, 0])
+        ay = float(y_face[ka, fa - 1, -1] - y_face[ka, fa - 1, 0])
+        bx = float(x_face[kb, fb - 1, -1] - x_face[kb, fb - 1, 0])
+        by = float(y_face[kb, fb - 1, -1] - y_face[kb, fb - 1, 0])
+        return (ax * bx + ay * by) < 0.0
+    return d_flip < d_same
+
+
+def _build_opposite_boundary_face_map(
+    conn: dict,
+    face_geom: dict,
+) -> tuple[np.ndarray, np.ndarray]:
+    EToE = np.asarray(conn["EToE"], dtype=int)
+    is_boundary = np.asarray(conn["is_boundary"], dtype=bool)
+    face_midpoints_raw = conn.get("face_midpoints", None)
+    boundary_groups = conn.get("boundary_groups", {})
+
+    K = int(EToE.shape[0])
+    nf = 3 * K
+    opposite_face_flat = -np.ones(nf, dtype=np.int64)
+    opposite_flip_flat = np.zeros(nf, dtype=np.bool_)
+
+    boundary_flat = is_boundary.reshape(-1)
+    if not np.any(boundary_flat):
+        return opposite_face_flat, opposite_flip_flat
+
+    if face_midpoints_raw is None:
+        return opposite_face_flat, opposite_flip_flat
+    face_midpoints = np.asarray(face_midpoints_raw, dtype=float)
+
+    if face_midpoints.shape != (K, 3, 2):
+        return opposite_face_flat, opposite_flip_flat
+
+    required_groups = ("left", "right", "bottom", "top")
+    missing = [g for g in required_groups if g not in boundary_groups]
+    if missing:
+        return opposite_face_flat, opposite_flip_flat
+
+    x_face = np.asarray(face_geom["x_face"], dtype=float)
+    y_face = np.asarray(face_geom["y_face"], dtype=float)
+
+    pairs = []
+    pairs.extend(
+        _pair_boundary_faces_by_axis(
+            boundary_groups["left"],
+            boundary_groups["right"],
+            face_midpoints,
+            axis=1,
+            label_a="left",
+            label_b="right",
+        )
+    )
+    pairs.extend(
+        _pair_boundary_faces_by_axis(
+            boundary_groups["bottom"],
+            boundary_groups["top"],
+            face_midpoints,
+            axis=0,
+            label_a="bottom",
+            label_b="top",
+        )
+    )
+
+    paired_idx: set[int] = set()
+    for (ka, fa), (kb, fb), axis in pairs:
+        ia = int(ka) * 3 + (int(fa) - 1)
+        ib = int(kb) * 3 + (int(fb) - 1)
+        if ia in paired_idx or ib in paired_idx:
+            raise ValueError("Boundary face paired more than once while building opposite-boundary map.")
+
+        flip = _opposite_pair_needs_flip(
+            x_face,
+            y_face,
+            ka=int(ka),
+            fa=int(fa),
+            kb=int(kb),
+            fb=int(fb),
+            axis=axis,
+        )
+
+        opposite_face_flat[ia] = ib
+        opposite_face_flat[ib] = ia
+        opposite_flip_flat[ia] = flip
+        opposite_flip_flat[ib] = flip
+        paired_idx.add(ia)
+        paired_idx.add(ib)
+
+    unpaired_boundary = np.nonzero(boundary_flat & (opposite_face_flat < 0))[0]
+    if unpaired_boundary.size > 0:
+        raise ValueError(
+            "Opposite-boundary map is incomplete for current mesh; "
+            f"unpaired boundary faces: {int(unpaired_boundary.size)}."
+        )
+
+    return opposite_face_flat, opposite_flip_flat
+
+
+def _build_boundary_state_from_opposite_boundary(
+    q_elem: np.ndarray,
+    cache: dict,
+) -> np.ndarray:
+    q_elem = np.asarray(q_elem, dtype=float)
+    K = int(cache["K"])
+    nfp = int(cache["nfp"])
+    nf = 3 * K
+
+    opposite_face_flat = cache.get("opposite_boundary_face_flat_numba", None)
+    opposite_flip_flat = cache.get("opposite_boundary_flip_flat_numba", None)
+    if opposite_face_flat is None or opposite_flip_flat is None:
+        raise ValueError(
+            "surface_cache missing opposite-boundary map; rebuild cache with compatible connectivity for opposite_boundary mode."
+        )
+
+    owner_elem = np.asarray(cache["owner_elem_flat_numba"], dtype=np.int64)
+    owner_node_ids = np.asarray(cache["owner_node_ids_flat_numba"], dtype=np.int64)
+    boundary_flat = np.asarray(cache["boundary_flat"], dtype=bool)
+    opposite_face_flat = np.asarray(opposite_face_flat, dtype=np.int64)
+    opposite_flip_flat = np.asarray(opposite_flip_flat, dtype=np.bool_)
+
+    qB_flat = np.zeros((nf, nfp), dtype=float)
+    boundary_idx = np.nonzero(boundary_flat)[0]
+    for idx in boundary_idx:
+        opp_idx = int(opposite_face_flat[idx])
+        if opp_idx < 0:
+            raise ValueError("Encountered unpaired boundary face in opposite_boundary mode.")
+        vals = q_elem[owner_elem[opp_idx], owner_node_ids[opp_idx, :]]
+        if bool(opposite_flip_flat[idx]):
+            vals = vals[::-1]
+        qB_flat[idx, :] = vals
+
+    return qB_flat.reshape(K, 3, nfp)
+
+
 def build_surface_exchange_cache(
     rule: dict,
     trace: dict,
@@ -581,6 +774,13 @@ def build_surface_exchange_cache(
         dtype=np.int64,
     )
 
+    opposite_face_flat, opposite_flip_flat = _build_opposite_boundary_face_map(
+        conn=conn,
+        face_geom=face_geom,
+    )
+    opposite_face_flat_numba = np.ascontiguousarray(opposite_face_flat, dtype=np.int64)
+    opposite_flip_flat_numba = np.ascontiguousarray(opposite_flip_flat, dtype=np.bool_)
+
     return {
         "K": K,
         "Np": int(ws.size),
@@ -620,6 +820,10 @@ def build_surface_exchange_cache(
         "boundary_face_idx_numba": boundary_face_idx_numba,
         "pair_face_a_numba": pair_face_a_numba,
         "pair_face_b_numba": pair_face_b_numba,
+        "opposite_boundary_face_flat": opposite_face_flat,
+        "opposite_boundary_flip_flat": opposite_flip_flat,
+        "opposite_boundary_face_flat_numba": opposite_face_flat_numba,
+        "opposite_boundary_flip_flat_numba": opposite_flip_flat_numba,
     }
 
 
@@ -734,6 +938,7 @@ def surface_term_from_exchange(
     ndotV_precomputed: np.ndarray | None = None,
     ndotV_flat_precomputed: np.ndarray | None = None,
     surface_inverse_mass_T: np.ndarray | None = None,
+    physical_boundary_mode: str = "exact_qb",
     q_boundary_correction=None,
     q_boundary_correction_mode: str = "inflow",
     volume_split_cache: dict | None = None,
@@ -788,14 +993,23 @@ def surface_term_from_exchange(
             u_face = np.asarray(u_face, dtype=float)
             v_face = np.asarray(v_face, dtype=float)
 
-    qB = q_boundary(x_face, y_face, t)
-    qB = np.asarray(qB, dtype=float)
+    boundary_mode = str(physical_boundary_mode).strip().lower()
+    if boundary_mode not in ("exact_qb", "opposite_boundary"):
+        raise ValueError("physical_boundary_mode must be one of: 'exact_qb', 'opposite_boundary'.")
+
+    if boundary_mode == "exact_qb":
+        if q_boundary is None:
+            raise ValueError("q_boundary callback is required when physical_boundary_mode='exact_qb'.")
+        qB = q_boundary(x_face, y_face, t)
+        qB = np.asarray(qB, dtype=float)
+    else:
+        qB = _build_boundary_state_from_opposite_boundary(q_elem=q_elem, cache=cache)
 
     if ndotV.shape != (K, 3, nfp) or qB.shape != (K, 3, nfp):
         raise ValueError("velocity/boundary callbacks must return arrays with shape (K, 3, Nfp).")
 
     qM_face_prefetched = None
-    if q_boundary_correction is not None:
+    if q_boundary_correction is not None and boundary_mode == "exact_qb":
         ids_faces = cache["ids_faces"]
         qM_face_prefetched = np.empty((K, 3, nfp), dtype=float)
         for jf in range(3):
@@ -941,6 +1155,7 @@ def surface_term_from_exchange(
             "qP_before_boundary_fill": qP_before,
             "qP": qP_filled,
             "qB": qB,
+            "physical_boundary_mode": boundary_mode,
             "u_face": u_face,
             "v_face": v_face,
             "ndotV": ndotV,
@@ -995,6 +1210,7 @@ def surface_term_from_exchange(
         "qP_before_boundary_fill": np.asarray(paired["uP"], dtype=float),
         "qP": qP_filled,
         "qB": qB,
+        "physical_boundary_mode": boundary_mode,
         "u_face": u_face,
         "v_face": v_face,
         "ndotV": ndotV,
@@ -1036,6 +1252,7 @@ def rhs_split_conservative_exchange(
     ndotV_flat_precomputed: np.ndarray | None = None,
     surface_inverse_mass_T: np.ndarray | None = None,
     volume_split_cache: dict | None = None,
+    physical_boundary_mode: str = "exact_qb",
     q_boundary_correction=None,
     q_boundary_correction_mode: str = "inflow",
 ) -> tuple[np.ndarray, dict]:
@@ -1103,6 +1320,7 @@ def rhs_split_conservative_exchange(
         ndotV_precomputed=ndotV_precomputed,
         ndotV_flat_precomputed=ndotV_flat_precomputed,
         surface_inverse_mass_T=surface_inverse_mass_T,
+        physical_boundary_mode=physical_boundary_mode,
         q_boundary_correction=q_boundary_correction,
         q_boundary_correction_mode=q_boundary_correction_mode,
     )

@@ -1,0 +1,561 @@
+
+===== PAGE 1 =====
+Simplex quadrature nodal DG method for wave equations on sphere
+March 9, 2026
+1.2n−1and2nQuadrature points in 2-simplex
+1.1. Barycentric Coordinates
+Consider the two-dimensional plane with coordinatesξ= (ξ, η). LetTbe the triangle with vertices
+ξv1 = (0,1),ξ v2 = (0,0),ξ v3 = (1,0)
+Any point within the triangle can be expressed as
+(ξ, η) =ξ=
+3X
+i=0
+biξvi ,
+3X
+i=1
+bi = 1, b i ≥0(1)
+whereb i fori= 1,2,3are known as the barycentric coordinates.
+Numerical integration is often encounter in computations. To conduct numerical integration overT,
+numerical quadrature points and weights are introduced in []. Below we quote the barycentric coordinates
+of the quadrature points and the associated weights for conducting integration of polynomials of degree at
+most degree2n−1and2n, in Table 1 and Table 2.
+nSymb 1 b2 ws
+i we
+i
+1S 6 0.2113248654051871 0.0000000000000000 0.16666666666666667 0.5000000000000000
+2S 6 0.1127016653792583 0.0000000000000000 0.04166666666666666 0.2777777777777777
+2S 3 0.5000000000000000 0.0000000000000000 0.09999999999999999 0.4444444444444444
+2S 1 0.3333333333333333 0.3333333333333333 0.45000000000000000 –
+3S 6 0.06943184420297367 0.0000000000000000 0.01509901487256561 0.1739274225687269
+3S 6 0.3300094782075718 0.0000000000000000 0.04045654068298990 0.3260725774312731
+3S 6 0.5841571139756568 0.1870738791912763 0.11111111111111111 –
+4S 6 0.04691007703066797 0.0000000000000000 0.006601315081001592 0.1184634425280944
+4S 6 0.2307653449471584 0.0000000000000000 0.02053045968042892 0.2393143352496833
+4S 3 0.5000000000000000 0.0000000000000000 0.01853708483394990 0.2844444444444446
+4S 3 0.1394337314154536 0.1394337314154536 0.10542932962084440 –
+4S 3 0.4384239524408185 0.4384239524408185 0.12473673228977350 –
+4S 1 0.3333333333333333 0.3333333333333333 0.09109991119771331 –
+Table 1: Barycentric coordinates of quadrature integration points for integrating polynomials of degree at most2n−1in a
+triangle.w s
+i are surface integration associated quadrature weights.w e
+i are line integration quadrature weights associated with
+edge points.
+===== PAGE 2 =====
+nSymb 1 b2 ws
+i
+1S 3 0.1666666666666666 0.1666666666666666 0.3333333333333333
+2S 3 0.09157621350977067 0.09157621350977067 0.1099517436553218
+2S 3 0.4459484909159648 0.4459484909159648 0.2233815896780115
+3S 3 0.219429982549783 0.219429982549783 0.1713331241529809
+3S 3 0.480137964112215 0.480137964112215 0.08073108959303095
+3S 6 0.1416190159239682 0.0193717243612408 0.04063455979366068
+4S 6 0.7284923929554044 0.2631128296346379 0.02723031417443505
+4S 3 0.4592925882927232 0.4592925882927232 0.09509163426728455
+4S 3 0.1705693077517602 0.1705693077517602 0.1032173705347182
+4S 3 0.05054722831703096 0.05054722831703096 0.03245849762319804
+4S 1 0.3333333333333333 0.3333333333333333 0.1443156076777874
+Table 2: Barycentric coordinates of quadrature integration points for integrating polynomials of degree at most2nin a triangle.
+ws
+i are surface integration associated quadrature weights.
+Based on these points we evaluate surface integration over a triangle, with|T|being the area of the
+triangle, by a discrete summation as follows,
+Z
+T
+f(ξ)dξ=|T|
+NX
+i=1
+f(ξ i)ws
+i ,(2)
+provided thatfis a polynomial of degree at most2n−1and2n. For evaluating line integrals on an edge
+of a triangle, we adopt the following quadrature formula:
+Z
+∂T γ
+f(ξ)dξ=|∂T γ|
+n+1X
+i=1
+f(ξ γ
+i )we
+i (3)
+where|∂T γ|denotes the length of the edgeγ,ξ γ
+i are the quadrature points on the edge, andwe
+i are the
+associated quadrature weights.
+2. Orthogonal Polynomials on Simplex
+We denote the triangle with vertices(−1,1),(−1,−1), and(1,−1)by
+T2 ={(r, s)|r, s≥ −1, r+s≤1}.
+Letn∈ {1,2,3,4}. OnT 2, let us introduce the orthogonal polynomialsϕi,j defined by
+ϕm(r, s) = Φij(r, s) =
+√
+2Pi(a)P (2i+1,j)
+j (b)(1−b) j,0≤i, j≤n, i+j≤n,
+m=j+ (n+ 1)i+ 1− i
+2(i−1), a= 2· 1 +r
+1−s −1, b=s
+2
+===== PAGE 3 =====
+whereP i is the Legendre polynomial of degreeiandP(2i+1,j)
+j is the Jabobi polynomials of degreej. Applying
+these basis functions we span the function space as
+V=span{Φ ij(r, s)|0≤i, j≤n, i+j≤n}
+Thus, forn= 1, we have the basis functions
+ϕ1(r, s)√
+2 =Φ00√
+2 =P 0
+2(1 +r)
+1−s
+
+P (1,0)
+0 (s)(1−s) 0 = 1
+ϕ2(r, s)√
+2 =Φ01√
+2 =P 0
+2(1 +r)
+1−s
+
+P (1,1)
+1 (s)(1−s) 1 = 2 + 4s−1
+2 (1−s) 1 = 2−2(1−s) 2
+ϕ3(r, s)√
+2 =Φ10√
+2 =P 1
+2(1 +r)
+1−s
+
+P (3,0)
+0 (s)(1−s) 0 = 1 +
+2(1 +r)
+1−s −1
+
+= 21 +r
+1−s
+Forn= 2, we have six functions,
+ϕ1(r, s)√
+2 =Φ00√
+2 =P 0
+2(1 +r)
+1−s
+
+P (1,0)
+0 (s)(1−s) 0 = 1
+ϕ2(r, s)√
+2 =Φ01√
+2 =P 0
+2(1 +r)
+1−s
+
+P (1,1)
+1 (s)(1−s) 1 = 2−2(1−s) 2
+ϕ3(r, s)√
+2 =Φ02√
+2 =P 0
+2(1 +r)
+1−s
+
+P (1,0)
+2 (s)(1−s) 2 =
+ 
+3 + 6
+2(1 +r)
+1−s −1
+
++ 5
+2
+2(1 +r)
+1−s −1
+2!
+(1−s) 2
+ϕ4(r, s)√
+2 =Φ10√
+2 =P 1
+2(1 +r)
+1−s
+
+P (3,0)
+0 (s)(1−s) 0 = 21 +r
+1−s
+ϕ5(r, s)√
+2 =Φ11√
+2 =P 1
+2(1 +r)
+1−s
+
+P (3,1)
+1 (s)(1−s) 1 = 21 +r
+1−s
+
+4 + 3
+2(1 +r)
+1−s −1
+
+(1−s) 1
+ϕ6(r, s)√
+2 =Φ20√
+2 =P 2
+2(1 +r)
+1−s
+
+P (5,0)
+0 (s)(1−s) 0 = 1 + 3
+2(1 +r)
+1−s −1
+
++ 3
+2
+2(1 +r)
+1−s −1
+2
+3. Approximation, Integration, and Differentiation
+3.1. Modal and nodal approximation
+Based on these grid points, we may seek numerical approximations to a functionudefined onT.
+Consider a function spaceVspanned by a set of linearly independent basis functionsϕ k(ξ, η)fori=
+1,2,· · ·, n, i.e.,
+V=span{ϕ i(ξ, η)|i= 1,2, ..., n}.
+Thus, a functionu(ξ, η)∈ Vcan be approximated as follows,
+u(ξ, η) =
+NX
+i=1
+aiϕi(ξ, η),(4)
+wherea i are coefficients. Applying the quadrature points(ξ m, ηm)form= 1,2,· · ·, Mand denoting
+u(ξm, ηm) =u m for simplicity, we have
+u=V a,(5)
+3
+===== PAGE 4 =====
+where
+u=
+
+
+u1
+u2
+...
+uM
+
+
+,V=
+
+
+ϕ1(ξ1, η1)ϕ 2(ξ1, η1)· · ·ϕ N(ξ1, η1)
+ϕ1(ξ2, η2)ϕ 2(ξ2, η2)· · ·ϕ N(ξ2, η2)
+... ... ... ...
+ϕ1(ξM , ηM)ϕ 2(ξM , ηM)· · ·ϕ N(ξM , ηM)
+
+
+,a=
+
+
+a1
+a2
+...
+aN
+
+
+.(6)
+Let
+W=diag(w s
+1, ws
+2,· · ·, w s
+M)(7)
+Define the mass matrix over the triangleTas
+M=|T|V T W V.(8)
+SinceWis diagonal, we have from Eq. (8)
+M T =|T|(V T W V) T =|T|V T W V=M(9)
+Furthermore, forabeing a non-zero vector andWbeing positive definite, we have
+aT M a=|T|(V a) T W(V a)>0.(10)
+indicating thatMis not only symmetric but also positive definite. Thus, its inverse exists, denoted by
+M −1.
+Then, multiplying|T|V T Wto Eq. (5), we have the vectoraas follows,
+|T|V T W u=|T|V T W V a=M a=⇒a=|T|M −1V T W u(11)
+3.2. Numerical differentiation
+To perform numerical differentiation on the vectoru, we need to construct the differentiation matrices
+for differentiating functions in theξandηdirections. Differentiating Eq. (4) with respect toξ, we have
+∂ξu(ξ, η) =
+NX
+i=1
+ai∂ξϕ(ξ, η)(12)
+Hence, the grid vector version of the above expression is
+uξ =V ξa,u ξ =
+
+
+∂ξu1
+∂ξu2
+...
+∂ξuM
+
+
+V ξ =
+
+
+∂ξϕ1(ξ1, η1)∂ ξϕ2(ξ1, η1)· · ·∂ ξϕN(ξ1, η1)
+∂ξϕ1(ξ2, η2)∂ ξϕ2(ξ2, η2)· · ·∂ ξϕN(ξ2, η2)
+... ... ... ...
+∂ξϕ1(ξM , ηM)∂ ξϕ2(ξM , ηM)· · ·∂ ξϕN(ξM , ηM)
+
+
+(13)
+4
+===== PAGE 5 =====
+Applying the relationship Eq. (11) we have
+uξ =V ξa=|T|V ξM −1V T W u=D ξu(14)
+whereD ξ is the differentiation matrix in theξdirection. Likewise, we construct the differentiation matrix
+in theηdirection and perform the associated numerical differentiation as follows,
+Dη =|T|V ηM −1V T W,u η =D ηu.(15)
+3.3. Numerical Integration
+Here we briefly summarize the extension of the quadrature rule.
+Letq(ξ)be a scalar function andV(ξ) = (u(ξ), v(ξ))be a vector-valued function. From the divergence
+theorem, we have
+I
+∂T
+n·(qF)dξ=
+Z
+T
+∇ ·(qF)dξ
+=
+Z
+T
+q∇ ·Fdξ+
+Z
+T
+F· ∇q dξ(16)
+If bothqandFare polynomials of degree at mostnthen we can apply the simplex quadrature rule to
+establish discrete version of the equation as follows,
+(qe)T W ef e
+n =|T|1 T W(D ξ(q⊙u) +D η(q⊙v))(17)
+=|T|q T W(D ξu+D ηv) +|T|(u T W Dξq+v T W Dηq)(18)
+whereq e andf e
+n are grid vector representations of the functionsqandn·Fat the three edges, andW e is
+the quadrature weight matrix with diagonal entries beingwe
+i fori= 1,2, ...,2n,
+W e =
+
+
+|∂T 1|0 0
+0|∂T 2|0
+0 0|∂T 3|
+
+ ⊗diag(w e
+1, we
+2,· · ·, w e
+n+1)
+3.4. Well-posed analysis for model wave equations
+Let us consider applying discontinuous Galerkin method to solve the model wave equation:
+∂tq(ξ, t) +∇ ·(Vq(ξ, t)) =0,ξ∈ T(19)
+q(ξ,0) =q 0(ξ),ξ∈ T(20)
+q(ξ, t) =g(ξ, t),ifn·V<0forξ∈γ⊂∂T, t≥0(21)
+We now conduct an energy estimate of the problem. The governing equation can be expressed in the
+following split form:
+∂tq=− 1
+2 ∇ ·(Vq)− 1
+2 V· ∇q− 1
+2(∇ ·V)q(22)
+5
+===== PAGE 6 =====
+Multiplying2qto the equation, integrating over the domainT, and invoking the identity∇ ·(Vq 2) =
+q∇ ·(Vq) +qV· ∇qas well the divergence theorem, we have
+d
+dt
+Z
+T
+q2(ξ, t)dξ=−
+Z
+T
+q∇ ·(Vq) +qV· ∇q+ (∇ ·V)q 2 dξ
+=−
+Z
+∇ ·(Vq 2) + (∇ ·V)q 2 dξ
+=−
+I
+∂T
+(n·V)q 2dξ−
+Z
+T
+(∇ ·V)q 2 dξ(23)
+Letα= max ξ∈T |∇ ·V|.
+d
+dt
+Z
+T
+q2(ξ, t)dξ−α
+Z
+T
+q2 dξ≤
+Z
+γ
+(−n·V)g 2 dξ(24)
+Multiplyinge −αt to the equation and integrating with respect tot, we have
+e−αt
+Z
+T
+q2(ξ, t)dξ−
+Z
+T
+q2(ξ,0)dξ≤
+Z t
+0
+Z
+γ
+(−n·V)g 2 dξdt(25)
+leading to
+Z
+T
+q2(ξ, t)dξ≤e αt
+Z
+T
+q2
+0(ξ)dξ+
+Z t
+0
+Z
+γ
+(−n·V)g 2(t′)dξdt ′
+
+(26)
+3.5. DG scheme for advection equation
+We now proceed constructing a DG scheme for solving advection equation.
+We consider the following discretization:
+∂tq=− 1
+2 (Dξ(u⊙q) +D η(v⊙q))− 1
+2(u⊙D ξq+v⊙D ηq)− 1
+2(Dξu+D ηv)⊙q
++ (|T|) −1W −1ET W ep(27)
+where
+E=
+h
+I 3(n+1)×3(n+1)|03(n+1)×(M−3(n+1))
+i
+(28)
+andpis the penalized boundary condition vector, and it is form is to be determined later.
+Multiplying2|T|q T Wfrom the left to the scheme and invoking the discrete divergence theorem, we have
+d
+dt(|T|q T W q) =− |T|q T W(D ξ(u⊙q) +D η(v⊙q))− |T|q T W(u⊙D ξq+v⊙D ηq)
+− |T|q T W(D ξu+D ηv)⊙q+ 2|T|(|T|) −1qT W W −1ET W ep
+=−
+I
+∂T
+(n·V)q 2 dx+|T|(u⊙q) T W Dξq+|T|(v⊙q) T W Dηq
+− |T|q T W(u⊙D ξq+v⊙D ηq)− |T|q T W(D ξu+D ηv)⊙q+ 2q T ET W ep(29)
+6
+===== PAGE 7 =====
+Note that
+(u⊙q) T W Dξq=
+NX
+i=0
+uiqi(Dξq)iws
+i =q T W(u⊙D ξq),(30)
+(v⊙q) T W Dηq=
+NX
+i=0
+viqi(Dηq)iws
+i =q T W(c⊙D ξq),(31)
+2qT ET W ep= 2(q e)T W p(32)
+Hence,
+d
+dt(|T|q T W q) =−
+I
+∂T
+(n·V)q 2 dx− |T|q T W((D ξu+D yηv)⊙q) + 2(q e)T W ep(33)
+Consider the boundary term as
+2(qe)T W ep=
+I
+∂T
+2q(f−f ∗)dξ(34)
+where
+f(ξ) = (n·V)q, f ∗(ξ) = n·Vq(ξ) +n·Vq ∗
+2 + (1−τ) |n·V|
+2 (q−q ∗)(35)
+where0≤τ≤1.
+Upwind flux (τ= 0) andq ∗ =g.. We now discuss the impact of the numerical fluxf∗.
+Case 1: out flow:n·V≥0.
+we have
+qf ∗ = n·Vq 2 +n·Vqg
+2 + n·V
+2 (q2 −qg) =n·Vq 2,2q(f−f ∗) = 0(36)
+Case 2: inflow:n·V<0.
+qf ∗ = n·Vq 2 +n·Vqg
+2 − n·V
+2 (q2 −qg) =n·Vqg,2q(f−f ∗) = 2(n·V)(q 2 −qg)(37)
+Thus, the boundary term becomes
+I
+∂T
+ρ
+z }| {
+(−n·V)q 2 + 2q(f−f ∗)dx≤
+Z
+γ
+(−n·V)g 2 dξ(38)
+since
+ρ=
+
+
+
+(−n·V)q 2 ≤0for out flowing (n·V>0)
+(n·V)(q−g) 2 −n·Vg 2 ≤(−n·V)g 2 for in flowing (n·V<0)
+(39)
+Ifmax ξ∈T || −D ξu−D ηv||=αthen we have the energy rate as
+|T| d
+dt(|T|q T W q) +α|T|(q T W q)≤ −
+I
+γ
+(n·V)g 2 dξ(40)
+7
+===== PAGE 8 =====
+Multiplying the above expression with respect to time and applying initial condition, we have
+(|T|q T W q)(t)≤e αt
+
+|T|q T
+0 W q0 +
+Z t
+0
+Z
+∂T
+(−n·V)g 2(ξ, t′)dξdt ′
+
+(41)
+We are left with the exact form ofp. Let
+q= [
+boundary points
+z }| {q1, q2,· · ·, q 3(n+1),
+interior points
+z }| {q3(n+1)+1,· · ·, q N]T ,p= [
+boundary points
+z }| {p1, p2,· · ·p 3(n+1)]T .(42)
+We require that
+2(qe)T W ep=
+n+1X
+i=1
+2|∂T 1|qiwe
+i pi +
+n+1X
+i=1
+2|∂T 2|qn+1+iwe
+i pn+1+i +
+n+1X
+i=1
+2|∂T 2|q2(n+1)+iwe
+i p2(n+1)+i (43)
+=
+I
+∂T
+2q(f−f ∗)dx(44)
+=
+n+1X
+i=1
+2|∂T 1|qi(fi −f ∗
+i )we
+i +
+n+1X
+i=1
+2|∂T 2|qn+1+i(fn+1+i −f ∗
+n+1+i)we
+i (45)
++
+n+1X
+i=1
+2|∂T 3|q2(n+1)+i(f2(n+1)+i −f ∗
+2(n+1)+i)we
+i (46)
+Thus,
+pi = (fi −f ∗
+i )(47)
+wheref i =f(ξ i)andf ∗
+i (ξi).
+Octahedron Sphere
+8

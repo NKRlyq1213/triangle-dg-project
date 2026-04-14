@@ -48,8 +48,26 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--surface-inverse-mass-mode",
         choices=("diagonal", "projected"),
-        default="projected",
-        help="surface lifting inverse mass: projected (default) or diagonal",
+        default="diagonal",
+        help="surface lifting inverse mass: diagonal (default) or projected",
+    )
+    parser.add_argument(
+        "--test-function",
+        choices=("sin2pi_x", "sin2pi_y", "sin2pi_xy"),
+        default="sin2pi_x",
+        help="transport exact-profile mode",
+    )
+    parser.add_argument(
+        "--physical-boundary-mode",
+        choices=("exact_qb", "opposite_boundary"),
+        default="exact_qb",
+        help="physical boundary exterior-state mode",
+    )
+    parser.add_argument(
+        "--interior-trace-mode",
+        choices=("exchange", "exact_trace"),
+        default="exchange",
+        help="interior-face mode: exchange uses connectivity, exact_trace uses exact exterior trace on all faces",
     )
     parser.add_argument(
         "--state-projection",
@@ -108,6 +126,9 @@ def _build_config(
     state_projection: str,
     projection_mode: str,
     projection_frequency: str,
+    test_function_mode: str,
+    physical_boundary_mode: str,
+    interior_trace_mode: str,
 ) -> LSRKHConvergenceConfig:
     projection_enabled = str(state_projection).strip().lower() == "on"
 
@@ -118,8 +139,8 @@ def _build_config(
             N=4,
             diagonal="anti",
             mesh_levels=(1, 2, 4, 8, 16),
-            cfl=0.1,
-            tf_values=(np.pi * 2,),
+            cfl=1.0,
+            tf_values=(np.pi*2,),
             tau=0.0,
             use_numba=True,
             enforce_polynomial_projection=projection_enabled,
@@ -127,6 +148,9 @@ def _build_config(
             projection_frequency=projection_frequency,
             surface_inverse_mass_mode=surface_inverse_mass_mode,
             surface_backend="face-major",
+            interior_trace_mode=interior_trace_mode,
+            test_function_mode=test_function_mode,
+            physical_boundary_mode=physical_boundary_mode,
             use_surface_cache=True,
             verbose=False,
         )
@@ -138,7 +162,7 @@ def _build_config(
         diagonal="anti",
         mesh_levels=(1, 2, 4, 8, 16, 32),
         cfl=1.0,
-        tf_values=(np.pi * 2,),
+        tf_values=(1.0,),
         tau=0.0,
         enforce_polynomial_projection=projection_enabled,
         use_numba=True,
@@ -146,6 +170,9 @@ def _build_config(
         projection_frequency=projection_frequency,
         surface_inverse_mass_mode=surface_inverse_mass_mode,
         surface_backend="face-major",
+        interior_trace_mode=interior_trace_mode,
+        test_function_mode=test_function_mode,
+        physical_boundary_mode=physical_boundary_mode,
         use_surface_cache=True,
         verbose=True,
     )
@@ -186,6 +213,9 @@ def main() -> None:
         state_projection=args.state_projection,
         projection_mode=args.projection_mode,
         projection_frequency=args.projection_frequency,
+        test_function_mode=args.test_function,
+        physical_boundary_mode=args.physical_boundary_mode,
+        interior_trace_mode=args.interior_trace_mode,
     )
 
     if qb_mode == "on":
@@ -196,6 +226,9 @@ def main() -> None:
         )
     print(f"[run] preset={args.preset}")
     print(f"[run] surface_inverse_mass_mode={config.surface_inverse_mass_mode}")
+    print(f"[run] test_function_mode={config.test_function_mode}")
+    print(f"[run] physical_boundary_mode={config.physical_boundary_mode}")
+    print(f"[run] interior_trace_mode={config.interior_trace_mode}")
     print(f"[run] qb_correction={qb_mode}")
     print(f"[run] state_projection={'on' if config.enforce_polynomial_projection else 'off'}")
     print(f"[run] projection_mode={config.projection_mode}")
@@ -214,12 +247,18 @@ def main() -> None:
             print()
             print_results_table(
                 baseline_results,
-                title=f"LSRK h-convergence (sinx) | baseline | tf={tf:g}, CFL={config.cfl:g}",
+                title=(
+                    f"LSRK h-convergence (sinx) | baseline | "
+                    f"trace={config.interior_trace_mode} | tf={tf:g}, CFL={config.cfl:g}"
+                ),
             )
             print()
             print_results_table(
                 corrected_results,
-                title=f"LSRK h-convergence (sinx) | rk-stage qB correction | tf={tf:g}, CFL={config.cfl:g}",
+                title=(
+                    f"LSRK h-convergence (sinx) | rk-stage qB correction | "
+                    f"trace={config.interior_trace_mode} | tf={tf:g}, CFL={config.cfl:g}"
+                ),
             )
 
             _print_compare_summary(baseline_results, corrected_results, tf=tf)
@@ -228,6 +267,8 @@ def main() -> None:
                 f"lsrk_h_convergence_sinx_tf{_tf_label(tf)}_"
                 f"table1_order{config.order}_N{config.N}_{config.diagonal}"
             )
+            if str(config.interior_trace_mode).strip().lower() != "exchange":
+                base_name += f"_{str(config.interior_trace_mode).strip().lower()}"
             if args.preset != "full":
                 base_name += f"_{args.preset}"
 
@@ -249,13 +290,21 @@ def main() -> None:
             print()
             print_results_table(
                 results,
-                title=f"LSRK h-convergence (sinx) | rk-stage qB correction | tf={tf:g}, CFL={config.cfl:g}",
+                title=(
+                    f"LSRK h-convergence (sinx) | rk-stage qB correction | "
+                    f"trace={config.interior_trace_mode} | tf={tf:g}, CFL={config.cfl:g}"
+                ),
             )
 
             csv_name = (
                 f"lsrk_h_convergence_sinx_tf{_tf_label(tf)}_"
                 f"table1_order{config.order}_N{config.N}_{config.diagonal}_rkstage_qb_only.csv"
             )
+            if str(config.interior_trace_mode).strip().lower() != "exchange":
+                csv_name = csv_name.replace(
+                    ".csv",
+                    f"_{str(config.interior_trace_mode).strip().lower()}.csv",
+                )
             if args.preset != "full":
                 csv_name = csv_name.replace(".csv", f"_{args.preset}.csv")
 
@@ -269,12 +318,23 @@ def main() -> None:
 
     for tf, results in all_results.items():
         print()
-        print_results_table(results, title=f"LSRK h-convergence (sinx) | tf={tf:g}, CFL={config.cfl:g}")
+        print_results_table(
+            results,
+            title=(
+                f"LSRK h-convergence (sinx) | trace={config.interior_trace_mode} | "
+                f"tf={tf:g}, CFL={config.cfl:g}"
+            ),
+        )
 
         csv_name = (
             f"lsrk_h_convergence_sinx_tf{_tf_label(tf)}_"
             f"table1_order{config.order}_N{config.N}_{config.diagonal}.csv"
         )
+        if str(config.interior_trace_mode).strip().lower() != "exchange":
+            csv_name = csv_name.replace(
+                ".csv",
+                f"_{str(config.interior_trace_mode).strip().lower()}.csv",
+            )
         if args.preset != "full":
             csv_name = csv_name.replace(".csv", f"_{args.preset}.csv")
 

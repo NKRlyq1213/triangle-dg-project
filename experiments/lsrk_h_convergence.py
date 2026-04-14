@@ -29,6 +29,7 @@ from operators.rhs_split_conservative_exchange import (
     build_surface_exchange_cache,
     build_volume_split_cache,
 )
+from operators.rhs_split_conservative_exact_trace import rhs_split_conservative_exact_trace
 
 from time_integration.lsrk54 import integrate_lsrk54
 from time_integration.lsrk54 import RK4A, RK4B, RK4C
@@ -44,7 +45,7 @@ class LSRKHConvergenceConfig:
     mesh_levels: tuple[int, ...] = (1, 2, 4, 8, 16, 32, 64, 128, 256)
 
     # Requested fixed setup from user:
-    # - q(x,y,t)=sin(pi*(x-t))
+    # - q(x,y,t)=sin(2*pi*(x-t))
     # - CFL=1
     # - final times tf=2*pi and tf=20*pi
     cfl: float = 1.0
@@ -52,16 +53,100 @@ class LSRKHConvergenceConfig:
 
     tau: float = 0.0
     use_numba: bool | None = True
-    enforce_polynomial_projection: bool = True
+    enforce_polynomial_projection: bool = False
     projection_mode: str = "post"
     projection_frequency: str = "step"
     surface_inverse_mass_mode: str = "diagonal"
     surface_backend: str = "face-major"
+    interior_trace_mode: str = "exchange"
+    test_function_mode: str = "sin2pi_x"
+    physical_boundary_mode: str = "exact_qb"
     use_surface_cache: bool = True
     use_sinx_rk_stage_boundary_correction: bool = False
     q_boundary_correction: Callable | None = None
     q_boundary_correction_mode: str = "inflow"
     verbose: bool = True
+
+
+@dataclass(frozen=True)
+class TransportTestFunctionSpec:
+    mode: str
+    phase_x: float
+    phase_y: float
+    phase_t: float
+    vel_x: float
+    vel_y: float
+
+
+_TEST_FUNCTION_SPECS = {
+    "sin2pi_x": TransportTestFunctionSpec(
+        mode="sin2pi_x",
+        phase_x=1.0,
+        phase_y=0.0,
+        phase_t=1.0,
+        vel_x=1.0,
+        vel_y=0.0,
+    ),
+    "sin2pi_y": TransportTestFunctionSpec(
+        mode="sin2pi_y",
+        phase_x=0.0,
+        phase_y=1.0,
+        phase_t=1.0,
+        vel_x=0.0,
+        vel_y=1.0,
+    ),
+    "sin2pi_xy": TransportTestFunctionSpec(
+        mode="sin2pi_xy",
+        phase_x=1.0,
+        phase_y=1.0,
+        phase_t=2.0,
+        vel_x=1.0,
+        vel_y=1.0,
+    ),
+}
+
+
+def _resolve_test_function_spec(mode: str) -> TransportTestFunctionSpec:
+    key = str(mode).strip().lower()
+    aliases = {
+        "x": "sin2pi_x",
+        "y": "sin2pi_y",
+        "xy": "sin2pi_xy",
+    }
+    key = aliases.get(key, key)
+    spec = _TEST_FUNCTION_SPECS.get(key)
+    if spec is None:
+        raise ValueError(
+            "test_function_mode must be one of: 'sin2pi_x', 'sin2pi_y', 'sin2pi_xy'."
+        )
+    return spec
+
+
+def _make_q_exact(spec: TransportTestFunctionSpec) -> Callable:
+    k = 2.0 * np.pi
+
+    def q_exact(x: np.ndarray, y: np.ndarray, t: float = 0.0) -> np.ndarray:
+        x = np.asarray(x, dtype=float)
+        y = np.asarray(y, dtype=float)
+        phase = k * (spec.phase_x * x + spec.phase_y * y - spec.phase_t * float(t))
+        return np.sin(phase)
+
+    return q_exact
+
+
+def _make_velocity(spec: TransportTestFunctionSpec) -> Callable:
+    def velocity(x: np.ndarray, y: np.ndarray, t: float = 0.0) -> tuple[np.ndarray, np.ndarray]:
+        del t
+        x = np.asarray(x, dtype=float)
+        y = np.asarray(y, dtype=float)
+        return spec.vel_x * np.ones_like(x), spec.vel_y * np.ones_like(y)
+
+    return velocity
+
+
+_DEFAULT_TEST_PROFILE = _TEST_FUNCTION_SPECS["sin2pi_x"]
+_DEFAULT_Q_EXACT = _make_q_exact(_DEFAULT_TEST_PROFILE)
+_DEFAULT_VELOCITY = _make_velocity(_DEFAULT_TEST_PROFILE)
 
 
 class SinxRKStageBoundaryCorrection:
@@ -75,12 +160,14 @@ class SinxRKStageBoundaryCorrection:
     so the correction remains consistent on the final short step.
     """
 
-    def __init__(self, dt: float):
+    def __init__(self, dt: float, profile: TransportTestFunctionSpec):
         dt = float(dt)
         if dt <= 0.0:
             raise ValueError("dt must be positive for SinxRKStageBoundaryCorrection.")
 
         self._dt_default = dt
+        self._profile = profile
+        self._k = 2.0 * np.pi
         self._initialized = False
         self._stage = 0
         self._last_t = -np.inf
@@ -95,12 +182,26 @@ class SinxRKStageBoundaryCorrection:
         self._Kgt = None
         self._Kgtt = None
 
-    def _reset(self, x_face: np.ndarray, t: float, expected_shape: tuple[int, int, int]) -> None:
-        phase = np.pi * (x_face - float(t))
+    def _phase(self, x_face: np.ndarray, y_face: np.ndarray, t: float) -> np.ndarray:
+        return self._k * (
+            self._profile.phase_x * x_face
+            + self._profile.phase_y * y_face
+            - self._profile.phase_t * float(t)
+        )
+
+    def _reset(
+        self,
+        x_face: np.ndarray,
+        y_face: np.ndarray,
+        t: float,
+        expected_shape: tuple[int, int, int],
+    ) -> None:
+        phase = self._phase(x_face, y_face, t)
+        lam = self._k * self._profile.phase_t
 
         self._g = np.sin(phase)
-        self._g_t = -np.pi * np.cos(phase)
-        self._g_tt = -(np.pi**2) * np.sin(phase)
+        self._g_t = -lam * np.cos(phase)
+        self._g_tt = -(lam**2) * np.sin(phase)
 
         self._Kg = np.zeros(expected_shape, dtype=float)
         self._Kgt = np.zeros(expected_shape, dtype=float)
@@ -137,8 +238,18 @@ class SinxRKStageBoundaryCorrection:
             return float(self._dt_default)
         return float(dt_step)
 
-    def _advance_one_stage(self, x_face: np.ndarray, *, t_stage: float, stage: int, dt_step: float) -> None:
-        g_ttt = (np.pi**3) * np.cos(np.pi * (x_face - float(t_stage)))
+    def _advance_one_stage(
+        self,
+        x_face: np.ndarray,
+        y_face: np.ndarray,
+        *,
+        t_stage: float,
+        stage: int,
+        dt_step: float,
+    ) -> None:
+        phase = self._phase(x_face, y_face, t_stage)
+        lam = self._k * self._profile.phase_t
+        g_ttt = (lam**3) * np.cos(phase)
 
         self._Kg *= RK4A[stage]
         self._Kgt *= RK4A[stage]
@@ -162,14 +273,17 @@ class SinxRKStageBoundaryCorrection:
         is_boundary: np.ndarray,
         q_boundary_exact: np.ndarray,
     ) -> np.ndarray:
-        del y_face, qM, ndotV, is_boundary
+        del qM, ndotV, is_boundary
 
         t = float(t)
         x_face = np.asarray(x_face, dtype=float)
+        y_face = np.asarray(y_face, dtype=float)
         q_boundary_exact = np.asarray(q_boundary_exact, dtype=float)
 
         if x_face.shape != q_boundary_exact.shape:
             raise ValueError("x_face and q_boundary_exact must share shape (K, 3, Nfp).")
+        if y_face.shape != q_boundary_exact.shape:
+            raise ValueError("y_face and q_boundary_exact must share shape (K, 3, Nfp).")
 
         if (
             (not self._initialized)
@@ -177,14 +291,24 @@ class SinxRKStageBoundaryCorrection:
             or (self._g is None)
             or (self._g.shape != q_boundary_exact.shape)
         ):
-            self._reset(x_face=x_face, t=t, expected_shape=q_boundary_exact.shape)
+            self._reset(
+                x_face=x_face,
+                y_face=y_face,
+                t=t,
+                expected_shape=q_boundary_exact.shape,
+            )
 
         if self._have_prev_call:
             prev_stage = int(self._prev_stage)
             curr_stage = int(self._stage)
 
             if curr_stage != ((prev_stage + 1) % 5):
-                self._reset(x_face=x_face, t=t, expected_shape=q_boundary_exact.shape)
+                self._reset(
+                    x_face=x_face,
+                    y_face=y_face,
+                    t=t,
+                    expected_shape=q_boundary_exact.shape,
+                )
             else:
                 dt_step = self._infer_step_dt(
                     t_prev=float(self._prev_t),
@@ -194,6 +318,7 @@ class SinxRKStageBoundaryCorrection:
                 )
                 self._advance_one_stage(
                     x_face=x_face,
+                    y_face=y_face,
                     t_stage=float(self._prev_t),
                     stage=prev_stage,
                     dt_step=dt_step,
@@ -211,8 +336,11 @@ class SinxRKStageBoundaryCorrection:
         return delta
 
 
-def build_sinx_rk_stage_boundary_correction(dt: float) -> Callable:
-    return SinxRKStageBoundaryCorrection(dt=dt)
+def build_sinx_rk_stage_boundary_correction(
+    dt: float,
+    profile: TransportTestFunctionSpec,
+) -> Callable:
+    return SinxRKStageBoundaryCorrection(dt=dt, profile=profile)
 
 
 def build_reference_diff_operators_from_rule(rule: dict, N: int) -> tuple[np.ndarray, np.ndarray]:
@@ -255,14 +383,11 @@ def build_projected_inverse_mass_from_rule(rule: dict, N: int) -> np.ndarray:
 
 
 def q_exact_sinx(x: np.ndarray, y: np.ndarray, t: float = 0.0) -> np.ndarray:
-    x = np.asarray(x, dtype=float)
-    return np.sin(np.pi * (x - t))
+    return _DEFAULT_Q_EXACT(x, y, t)
 
 
 def velocity_one_one(x: np.ndarray, y: np.ndarray, t: float = 0.0) -> tuple[np.ndarray, np.ndarray]:
-    x = np.asarray(x, dtype=float)
-    y = np.asarray(y, dtype=float)
-    return np.ones_like(x), np.zeros_like(y)
+    return _DEFAULT_VELOCITY(x, y, t)
 
 
 def weighted_l2_error(err: np.ndarray, rule: dict, face_geom: dict) -> float:
@@ -291,7 +416,7 @@ def compute_convergence_rate(errors: list[float]) -> list[float]:
 
 def _validate_config(config: LSRKHConvergenceConfig) -> None:
     if str(config.table_name).lower().strip() != "table1":
-        raise ValueError("LSRK exchange h-convergence currently supports table_name='table1' only.")
+        raise ValueError("LSRK h-convergence currently supports table_name='table1' only.")
     if config.cfl <= 0.0:
         raise ValueError("cfl must be positive.")
     if len(config.mesh_levels) == 0:
@@ -311,6 +436,21 @@ def _validate_config(config: LSRKHConvergenceConfig) -> None:
     surface_inverse_mass_mode = str(config.surface_inverse_mass_mode).strip().lower()
     if surface_inverse_mass_mode not in ("diagonal", "projected"):
         raise ValueError("surface_inverse_mass_mode must be one of: 'diagonal', 'projected'.")
+    interior_trace_mode = str(config.interior_trace_mode).strip().lower()
+    if interior_trace_mode not in ("exchange", "exact_trace"):
+        raise ValueError("interior_trace_mode must be one of: 'exchange', 'exact_trace'.")
+    test_function_mode = str(config.test_function_mode).strip().lower()
+    if test_function_mode not in ("sin2pi_x", "sin2pi_y", "sin2pi_xy", "x", "y", "xy"):
+        raise ValueError(
+            "test_function_mode must be one of: 'sin2pi_x', 'sin2pi_y', 'sin2pi_xy'."
+        )
+    physical_boundary_mode = str(config.physical_boundary_mode).strip().lower()
+    if physical_boundary_mode not in ("exact_qb", "opposite_boundary"):
+        raise ValueError("physical_boundary_mode must be one of: 'exact_qb', 'opposite_boundary'.")
+    if interior_trace_mode == "exact_trace" and physical_boundary_mode != "exact_qb":
+        raise ValueError(
+            "interior_trace_mode='exact_trace' currently supports only physical_boundary_mode='exact_qb'."
+        )
     q_boundary_correction_mode = str(config.q_boundary_correction_mode).strip().lower()
     if q_boundary_correction_mode not in ("inflow", "boundary", "all"):
         raise ValueError("q_boundary_correction_mode must be one of: 'inflow', 'boundary', 'all'.")
@@ -331,6 +471,12 @@ def run_lsrk_h_convergence_for_tf(
     projection_mode = str(config.projection_mode).strip().lower()
     projection_frequency = str(config.projection_frequency).strip().lower()
     surface_inverse_mass_mode = str(config.surface_inverse_mass_mode).strip().lower()
+    interior_trace_mode = str(config.interior_trace_mode).strip().lower()
+    physical_boundary_mode = str(config.physical_boundary_mode).strip().lower()
+    q_boundary_correction_mode = str(config.q_boundary_correction_mode).strip().lower()
+    test_function_spec = _resolve_test_function_spec(config.test_function_mode)
+    q_exact = _make_q_exact(test_function_spec)
+    velocity = _make_velocity(test_function_spec)
 
     rule = load_table1_rule(config.order)
     trace = build_trace_policy(rule)
@@ -357,17 +503,19 @@ def run_lsrk_h_convergence_for_tf(
             diagonal=config.diagonal,
         )
 
-        conn = build_face_connectivity(VX, VY, EToV, classify_boundary="box")
+        conn = None
+        if interior_trace_mode == "exchange":
+            conn = build_face_connectivity(VX, VY, EToV, classify_boundary="box")
 
         X, Y = map_reference_nodes_to_all_elements(rule["rs"], VX, VY, EToV)
 
-        q0 = q_exact_sinx(X, Y, t=0.0)
+        q0 = q_exact(X, Y, t=0.0)
         if projector_t is not None:
             q0_proj = np.empty_like(q0)
             np.matmul(q0, projector_t, out=q0_proj)
             q0 = q0_proj
 
-        u_elem, v_elem = velocity_one_one(X, Y, t=0.0)
+        u_elem, v_elem = velocity(X, Y, t=0.0)
 
         geom = affine_geometric_factors_from_mesh(VX, VY, EToV, rule["rs"])
         face_geom = affine_face_geometry_from_mesh(VX, VY, EToV, trace)
@@ -379,7 +527,7 @@ def run_lsrk_h_convergence_for_tf(
             geom=geom,
         )
         surface_cache = None
-        if config.use_surface_cache:
+        if config.use_surface_cache and interior_trace_mode == "exchange":
             surface_cache = build_surface_exchange_cache(
                 rule=rule,
                 trace=trace,
@@ -387,7 +535,7 @@ def run_lsrk_h_convergence_for_tf(
                 face_geom=face_geom,
             )
 
-        u_face, v_face = velocity_one_one(
+        u_face, v_face = velocity(
             np.asarray(face_geom["x_face"], dtype=float),
             np.asarray(face_geom["y_face"], dtype=float),
             t=0.0,
@@ -409,16 +557,68 @@ def run_lsrk_h_convergence_for_tf(
         q_boundary_correction = config.q_boundary_correction
         q_boundary_correction_kind = "none"
         if config.use_sinx_rk_stage_boundary_correction:
-            q_boundary_correction = build_sinx_rk_stage_boundary_correction(dt=dt_nominal)
+            q_boundary_correction = build_sinx_rk_stage_boundary_correction(
+                dt=dt_nominal,
+                profile=test_function_spec,
+            )
             q_boundary_correction_kind = "sinx_rk_stage"
         elif q_boundary_correction is not None:
             q_boundary_correction_kind = "custom"
 
+        if interior_trace_mode == "exchange" and physical_boundary_mode == "opposite_boundary":
+            if q_boundary_correction_kind == "sinx_rk_stage":
+                q_boundary_correction_kind = "disabled_for_opposite_boundary"
+            elif q_boundary_correction_kind == "custom":
+                q_boundary_correction_kind = "disabled_custom_for_opposite_boundary"
+            q_boundary_correction = None
+        else:
+            if interior_trace_mode == "exact_trace" and q_boundary_correction_kind == "sinx_rk_stage":
+                q_boundary_correction_kind = "sinx_rk_stage_exact_trace"
+            elif interior_trace_mode == "exact_trace" and q_boundary_correction_kind == "custom":
+                q_boundary_correction_kind = "custom_exact_trace"
+
         projector_for_rhs_t = projector_t if (projector_t is not None and projection_frequency == "rhs") else None
 
         def rhs(t: float, q: np.ndarray) -> np.ndarray:
-            total_rhs, _ = rhs_split_conservative_exchange(
-                q_elem=q,
+            if interior_trace_mode == "exchange":
+                total_rhs, _ = rhs_split_conservative_exchange(
+                    q_elem=q,
+                    u_elem=u_elem,
+                    v_elem=v_elem,
+                    Dr=Dr,
+                    Ds=Ds,
+                    geom=geom,
+                    rule=rule,
+                    trace=trace,
+                    conn=conn,
+                    face_geom=face_geom,
+                    q_boundary=q_exact,
+                    velocity=velocity,
+                    t=t,
+                    tau=config.tau,
+                    compute_mismatches=False,
+                    return_diagnostics=False,
+                    use_numba=config.use_numba,
+                    state_projector_T=projector_for_rhs_t,
+                    state_projector_mode=projection_mode,
+                    surface_backend=config.surface_backend,
+                    surface_cache=surface_cache,
+                    ndotV_precomputed=ndotV_precomputed,
+                    ndotV_flat_precomputed=ndotV_flat_precomputed,
+                    volume_split_cache=volume_split_cache,
+                    surface_inverse_mass_T=surface_inverse_mass_t,
+                    physical_boundary_mode=physical_boundary_mode,
+                    q_boundary_correction=q_boundary_correction,
+                    q_boundary_correction_mode=q_boundary_correction_mode,
+                )
+                return total_rhs
+
+            q_work = np.asarray(q, dtype=float)
+            if projector_for_rhs_t is not None and projection_mode in ("both", "pre"):
+                q_work = q_work @ projector_for_rhs_t
+
+            total_rhs, _ = rhs_split_conservative_exact_trace(
+                q_elem=q_work,
                 u_elem=u_elem,
                 v_elem=v_elem,
                 Dr=Dr,
@@ -426,26 +626,21 @@ def run_lsrk_h_convergence_for_tf(
                 geom=geom,
                 rule=rule,
                 trace=trace,
-                conn=conn,
-                face_geom=face_geom,
-                q_boundary=q_exact_sinx,
-                velocity=velocity_one_one,
+                VX=VX,
+                VY=VY,
+                EToV=EToV,
+                q_exact=q_exact,
+                velocity=velocity,
                 t=t,
                 tau=config.tau,
-                compute_mismatches=False,
-                return_diagnostics=False,
-                use_numba=config.use_numba,
-                state_projector_T=projector_for_rhs_t,
-                state_projector_mode=projection_mode,
-                surface_backend=config.surface_backend,
-                surface_cache=surface_cache,
-                ndotV_precomputed=ndotV_precomputed,
-                ndotV_flat_precomputed=ndotV_flat_precomputed,
-                volume_split_cache=volume_split_cache,
-                surface_inverse_mass_T=surface_inverse_mass_t,
+                face_geom=face_geom,
                 q_boundary_correction=q_boundary_correction,
-                q_boundary_correction_mode=config.q_boundary_correction_mode,
+                q_boundary_correction_mode=q_boundary_correction_mode,
+                use_numba=config.use_numba,
             )
+
+            if projector_for_rhs_t is not None and projection_mode in ("both", "post"):
+                total_rhs = total_rhs @ projector_for_rhs_t
             return total_rhs
 
         post_step_transform = None
@@ -472,13 +667,13 @@ def run_lsrk_h_convergence_for_tf(
         tf_target = float(tf)
         reached_tf = bool(np.isclose(tf_used, tf_target, atol=1e-12, rtol=1e-12))
 
-        q_exact_at_stop = q_exact_sinx(X, Y, t=tf_used)
+        q_exact_at_stop = q_exact(X, Y, t=tf_used)
         err_at_stop = qf - q_exact_at_stop
         L2_error_at_stop = weighted_l2_error(err_at_stop, rule, face_geom)
         Linf_error_at_stop = float(np.max(np.abs(err_at_stop)))
 
         if reached_tf:
-            q_exact_final = q_exact_sinx(X, Y, t=tf_target)
+            q_exact_final = q_exact(X, Y, t=tf_target)
             err = qf - q_exact_final
             L2_error = weighted_l2_error(err, rule, face_geom)
             Linf_error = float(np.max(np.abs(err)))
@@ -515,8 +710,11 @@ def run_lsrk_h_convergence_for_tf(
             "projection_mode": projection_mode,
             "projection_frequency": projection_frequency,
             "surface_inverse_mass_mode": surface_inverse_mass_mode,
+            "interior_trace_mode": interior_trace_mode,
+            "test_function_mode": test_function_spec.mode,
+            "physical_boundary_mode": physical_boundary_mode,
             "q_boundary_correction_kind": q_boundary_correction_kind,
-            "q_boundary_correction_mode": str(config.q_boundary_correction_mode).strip().lower(),
+            "q_boundary_correction_mode": q_boundary_correction_mode,
         }
         results.append(row)
 
