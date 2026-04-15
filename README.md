@@ -1,29 +1,45 @@
-# triangle_dg_project
+﻿# triangle_dg_project
 
 Triangle-domain polynomial reconstruction and DG-oriented operators on the reference triangle.
 
-## Overview
+三角形參考域上的多項式重建與 DG 導向運算元實作。
+
+## Overview / 概覽
 
 This repository provides reusable numerical components for triangle-based DG workflows.
-It focuses on basis construction, quadrature handling, differentiation/reconstruction
-operators, geometric mappings, exchange-based RHS assembly, and experiment scripts.
+It focuses on basis construction, quadrature handling, differentiation and reconstruction
+operators, geometric mappings, exchange-based RHS assembly, and experiment runners.
 
 Current state is a DG-ready foundation, not yet a complete production solver.
 
-## Installation
+本專案提供可重用的三角形 DG 工作流程數值元件，重點在基底、積分規則、微分/重建運算元、
+幾何映射、exchange-based RHS 組裝與實驗執行工具。
+
+目前定位為 DG-ready foundation，尚未是完整的 production solver。
+
+## Installation / 安裝
 
 Recommended Python version:
 
 - Python 3.10 or later
 
-Core dependencies:
+建議 Python 版本：
+
+- Python 3.10 以上
+
+Runtime dependencies:
 
 - numpy>=1.26
 - scipy>=1.11
 - matplotlib>=3.8
-- pytest>=7.4
 
-Install dependencies:
+執行期依賴如下：
+
+- numpy>=1.26
+- scipy>=1.11
+- matplotlib>=3.8
+
+Install runtime dependencies:
 
 ```bash
 pip install -r requirements.txt
@@ -35,61 +51,43 @@ Editable install:
 pip install -e .
 ```
 
+Development extras:
+
+```bash
+pip install -e .[dev]
+pip install -r requirements-dev.txt
+```
+
 Optional performance extra (Numba):
 
 ```bash
 pip install -e .[perf]
+pip install -e .[dev,perf]
 ```
 
-## Repository Structure
+## Repository Structure / 專案結構
 
 ```text
-basis/
-    Jacobi and simplex basis utilities, mode indexing.
-
-data/
-    Table-1/Table-2 quadrature rules and edge rules.
-
-geometry/
-    Reference triangle, affine mapping, metrics, mesh connectivity,
-    sampling, and display-point helpers.
-
-operators/
-    Vandermonde, mass, differentiation, reconstruction,
-    trace/exchange, and conservative split-form RHS operators.
-
-problems/
-    Analytic fields and initial-condition wrappers.
-
-time_integration/
-    LSRK54 integrator and CFL utilities.
-
-visualization/
-    Plotting utilities for nodes, scalar fields, radial/3D diagnostics.
-
-experiments/
-    Experiment backends for h-convergence and RHS benchmarks.
-
-demo/
-    foundations/
-        smoke checks and connectivity/trace/exchange demos.
-    visualization/
-        plotting and reconstruction demos.
-    advanced/
-        differentiation and split diagnostics.
-    experiments/
-        executable experiment runners.
-
-tests/
-    unit/
-    integration/
-    regression/
-    test_*.py at tests root (core exactness and functional checks)
+basis/              Basis construction and mode indexing
+cli/                Canonical experiment entry points
+data/               Table-1/Table-2 quadrature rules and edge rules
+demo/               Foundations, visualization, and advanced demos
+docs/               Project notes and experiment CLI docs
+experiments/        Experiment backends and output-path helpers
+geometry/           Reference triangle, affine maps, metrics, connectivity
+operators/          Vandermonde, mass, differentiation, trace, RHS assembly
+problems/           Analytic fields and initial-condition helpers
+time_integration/   CFL utilities and LSRK54 integrator
+tests/              unit, integration, and regression coverage
+visualization/      Plotting helpers for scalar fields and diagnostics
 ```
 
-## Quick Start
+上面列出目前核心模組分工；若你要擴充功能，建議優先在 `experiments/`、`operators/`、`tests/`
+三個區塊保持同步演進。
 
-Load a quadrature rule and build Vandermonde:
+## Quick Start / 快速開始
+
+Load a quadrature rule and build a Vandermonde matrix:
 
 ```python
 from data import load_table2_rule
@@ -100,13 +98,15 @@ rs = rule["rs"]
 V = vandermonde2d(4, rs[:, 0], rs[:, 1])
 ```
 
+載入積分規則並建立 Vandermonde 矩陣。
+
 Weighted modal reconstruction:
 
 ```python
 from data import load_table2_rule
-from operators import vandermonde2d, fit_modal_coefficients_weighted
-from problems import ground_truth_function
 from geometry import reference_triangle_area
+from operators import fit_modal_coefficients_weighted, vandermonde2d
+from problems import ground_truth_function
 
 rule = load_table2_rule(4)
 rs = rule["rs"]
@@ -122,11 +122,15 @@ coeffs = fit_modal_coefficients_weighted(
 )
 ```
 
-## Demo Commands
+以上示範以加權最小平方法進行 modal reconstruction。
+
+## Commands / 指令
 
 Run commands from the project root.
 
-### Foundations
+請在專案根目錄執行以下指令。
+
+### Foundations / 基礎範例
 
 ```bash
 python -m demo.foundations.smoke_phase1
@@ -140,7 +144,7 @@ python -m demo.foundations.demo_exchange_step3
 python -m demo.foundations.demo_compare_sampling
 ```
 
-### Visualization
+### Visualization / 視覺化
 
 ```bash
 python -m demo.visualization.demo_plot_nodes --table both --orders 1 2 3 4
@@ -151,125 +155,105 @@ python -m demo.visualization.demo_plot_mesh_nodes
 python -m demo.visualization.demo_radial_sampling_table2
 ```
 
-### Advanced
+### Advanced / 進階
 
 ```bash
 python -m demo.advanced.demo_differentiation_weighted
 python -m demo.advanced.demo_split_gaussian_field
 ```
 
-### Experiments
+### Experiments (Canonical CLI) / 實驗（標準 CLI 入口）
 
 ```bash
-python -m demo.experiments.run_field_h_convergence
-python -m demo.experiments.run_div_h_convergence
-python -m demo.experiments.run_rhs_exchange_benchmark
-python -m demo.experiments.run_lsrk_h_convergence --preset quick
-python -m demo.experiments.run_lsrk_h_convergence --preset full
-python -m demo.experiments.run_lsrk_h_convergence --preset quick --qb-correction compare
-python -m demo.experiments.run_lsrk_h_convergence --preset quick --qb-correction on
-python -m demo.experiments.run_lsrk_h_convergence --preset quick --qb-correction off --surface-inverse-mass-mode diagonal --state-projection off
-python -m demo.experiments.run_lsrk_h_convergence --preset quick --test-function sin2pi_y
-python -m demo.experiments.run_lsrk_h_convergence --preset quick --test-function sin2pi_xy
-python -m demo.experiments.run_lsrk_h_convergence --preset quick --physical-boundary-mode opposite_boundary
-python -m demo.experiments.run_lsrk_h_convergence --preset quick --qb-correction on --state-projection on --projection-mode both --projection-frequency rhs
+python -m cli.run_field_h_convergence
+python -m cli.run_div_h_convergence
+python -m cli.run_rhs_exchange_benchmark
+python -m cli.run_lsrk_h_convergence --preset quick
+python -m cli.plot_lsrk_error_vs_time --mesh-levels 8 16 32 --tf 6.283185307179586 --test-function sin2pi_xy --qb-correction on
 ```
 
-## LSRK qB Correction Workflow
+Legacy compatibility wrappers under `demo.experiments.*` are still available,
+but `cli.*` is the canonical entry point going forward.
 
-The LSRK runner supports three user-facing modes:
+`demo.experiments.*` 仍可使用，但其角色是相容層；建議新流程以 `cli.*` 為主。
 
-- Baseline:
+## LSRK CLI Highlights / LSRK CLI 重點
 
-```bash
-python -m demo.experiments.run_lsrk_h_convergence --preset quick --qb-correction off
-```
+`cli.run_lsrk_h_convergence` visible parameters:
 
-- Compare baseline vs correction:
+- `--preset {quick,full}` (default `quick`)
+- `--qb-correction {off,on,compare}` (default `off`)
+- `--surface-inverse-mass-mode {diagonal,projected}`
+- `--test-function {sin2pi_x,sin2pi_y,sin2pi_xy}`
+- `--physical-boundary-mode {exact_qb,opposite_boundary}`
+- `--interior-trace-mode {exchange,exact_trace}`
+- `--tau FLOAT` controls the surface numerical flux; `tau=0` is pure upwind and larger `tau` reduces the `|n·V|(qM-qP)` penalty
 
-```bash
-python -m demo.experiments.run_lsrk_h_convergence --preset quick --qb-correction compare
-```
+`cli.plot_lsrk_error_vs_time` visible parameters:
 
-- Correction-only:
+- `--mesh-level INT` or `--mesh-levels INT [INT ...]`
+- `--tf FLOAT`, `--cfl FLOAT`
+- `--test-function {sin2pi_x,sin2pi_y,sin2pi_xy}`
+- `--physical-boundary-mode {exact_qb,opposite_boundary}`
+- `--interior-trace-mode {exchange,exact_trace}`
+- `--qb-correction {off,on}`
+- `--surface-inverse-mass-mode {diagonal,projected}`
+- `--tau FLOAT` controls the surface numerical flux; `tau=0` is pure upwind and larger `tau` reduces the `|n·V|(qM-qP)` penalty
+- `--output PATH`
 
-```bash
-python -m demo.experiments.run_lsrk_h_convergence --preset quick --qb-correction on
-```
+Current constraints:
 
-Flag notes:
+- `interior-trace-mode=exact_trace` supports only `physical-boundary-mode=exact_qb`
+- `interior-trace-mode=exact_trace` does not support `surface-inverse-mass-mode=projected`
+- `physical-boundary-mode=opposite_boundary` disables qB correction
 
-- `--preset quick`: mesh_levels=(1,2,4,8,16), tf_values=(1,)
-- `--preset full`: mesh_levels=(1,2,4,8,16,32), tf_values=(1,)
-- `--qb-correction`: `off` (baseline), `on` (rk-stage correction only), `compare` (run both)
-- legacy aliases are still supported: `--compare-qb-correction` and `--qb-correction-only`
-- `--surface-inverse-mass-mode`: `diagonal` (default), `projected`
-- `--state-projection`: `off` (default), `on`
-- `--projection-mode`: `pre`, `post`, `both` (active when `--state-projection on`)
-- `--projection-frequency`: `rhs`, `step` (active when `--state-projection on`)
-- `--test-function`: `sin2pi_x`, `sin2pi_y`, `sin2pi_xy`
-- `--physical-boundary-mode`: `exact_qb`, `opposite_boundary`
-    - `exact_qb`: physical boundary uses q_boundary callback (qB correction can apply)
-    - `opposite_boundary`: physical boundary uses opposite box boundary trace pairing (no qB correction applied)
+LSRK 指令常用參數與限制如上，完整細節可參考 [docs/experiments.md](docs/experiments.md)。
 
-Relevant `LSRKHConvergenceConfig` knobs in the backend:
+## Outputs / 輸出
 
-- `enforce_polynomial_projection`: enable/disable nodal state projection
-- `projection_mode`: `both`, `pre`, `post`
-- `projection_frequency`: `rhs`, `step`
-- `surface_inverse_mass_mode`: `projected`, `diagonal`
-- `test_function_mode`: `sin2pi_x`, `sin2pi_y`, `sin2pi_xy`
-- `physical_boundary_mode`: `exact_qb`, `opposite_boundary`
-- `surface_backend`: currently configured as `face-major` in the runner presets
-- `use_sinx_rk_stage_boundary_correction`: built-in notebook-style stage correction
-- `q_boundary_correction`: custom callback hook
-- `q_boundary_correction_mode`: `inflow`, `boundary`, `all`
+Experiment outputs are managed under `experiments_outputs/`.
+Canonical experiment runs write into producer-specific subdirectories, while
+temporary analysis, profiling, or preserved legacy artifacts should go under
+`experiments_outputs/scratch/`.
 
-## Output Files
+實驗輸出統一放在 `experiments_outputs/`，正式結果依實驗類型分組；
+暫時分析圖、profiling、smoke artifacts 與保留的 legacy 檔案則放在
+`experiments_outputs/scratch/`。
 
-Generated outputs are written from project root:
+Canonical grouped directories:
 
-- Figures: `photo/`
-- CSV tables: `experiments_outputs/`
+- `experiments_outputs/field_h_convergence/`
+- `experiments_outputs/div_h_convergence/`
+- `experiments_outputs/rhs_exchange_benchmark/`
+- `experiments_outputs/lsrk_h_convergence/`
+- `experiments_outputs/lsrk_error_vs_time/`
+- `experiments_outputs/scratch/`
 
-Common CSV names:
+Demo figures are written under `photo/`.
+Both top-level figure files and grouped folders can appear, for example:
 
-- `field_h_convergence_table1_order4_N4_anti.csv`
-- `div_h_convergence_table1_order4_N4_anti.csv`
-- `rhs_exchange_benchmark_table1_order4_N4_anti.csv`
-- `lsrk_h_convergence_sinx_tf{tf}_table1_order4_N4_anti.csv`
+- `photo/table1_nodes_order_4.png`
+- `photo/demo_connectivity_step1_2x2.png`
+- `photo/differentiation_photo/`
 
-LSRK mode-specific suffixes:
+詳細實驗 CLI 參數、命名規則與限制條件請見 [docs/experiments.md](docs/experiments.md)。
 
-- Quick preset baseline: `_quick`
-- Compare mode outputs: `_baseline`, `_rkstage_qb` (and `_quick_...` variants)
-- Correction-only outputs: `_rkstage_qb_only` (or `_rkstage_qb_only_quick`)
-
-LSRK CSV rows include mesh/time/error metrics and mode metadata such as:
-
-- `projection_enabled`
-- `projection_mode`, `projection_frequency`
-- `surface_inverse_mass_mode`
-- `q_boundary_correction_kind`, `q_boundary_correction_mode`
-
-## Testing and Validation
+## Testing / 測試
 
 Typical commands:
 
 ```bash
+pytest tests
 pytest tests/unit
 pytest tests/integration
+pytest tests/integration/lsrk
+pytest tests/integration/rhs
 pytest tests/regression
-pytest tests
 ```
 
-If you want routine runs without LSRK-focused cases:
+常見測試流程會先跑 integration 子集合，再做完整 `pytest tests` 回歸。
 
-```bash
-pytest tests -k "not lsrk"
-```
-
-## Current Scope
+## Current Scope / 目前範圍
 
 Implemented:
 
@@ -279,15 +263,22 @@ Implemented:
 - exchange-based split-form RHS building blocks
 - LSRK experiment workflows and visualization demos
 
+目前已實作：
+
+- 基底與積分規則工具
+- Vandermonde、mass、微分與重建運算元
+- 仿射幾何與連通性工具
+- exchange-based split-form RHS 元件
+- LSRK 實驗流程與視覺化範例
+
 Still evolving:
 
 - full multi-physics production solver pipeline
 - broader long-horizon regression coverage for all workflows
-- finalized and stable public API boundaries across all helper modules
+- finalized and stable public API boundaries across helper modules
 
-## Development Principles
+仍在演進：
 
-1. Correctness before optimization
-2. Exactness and consistency checks before large demos
-3. Geometry/metric consistency before mapped-operator usage
-4. Clear module interfaces before solver-level expansion
+- 多物理 production solver 完整流程
+- 更完整的長時程回歸覆蓋
+- helper 模組公開 API 邊界的最終穩定化

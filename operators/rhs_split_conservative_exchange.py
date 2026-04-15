@@ -97,6 +97,7 @@ if _NUMBA_AVAILABLE:
         q_elem: np.ndarray,
         ndotV_flat: np.ndarray,
         qB_flat: np.ndarray,
+        tau: float,
         owner_elem_flat: np.ndarray,
         owner_node_ids_flat: np.ndarray,
         owner_wratio_flat: np.ndarray,
@@ -125,11 +126,12 @@ if _NUMBA_AVAILABLE:
                     qP = q_elem[nbr_k, nbr_node_ids_flat[face_idx, i]]
 
                 ndv = ndotV_flat[face_idx, i]
-                if ndv < 0.0:
+                coeff = 0.5 * (ndv - (1.0 - tau) * abs(ndv))
+                if coeff != 0.0:
                     surface_rhs[k, m_id] += (
                         scale
                         * owner_wratio_flat[face_idx, i]
-                        * ndv
+                        * coeff
                         * (qM - qP)
                     )
 
@@ -139,6 +141,7 @@ if _NUMBA_AVAILABLE:
         q_elem: np.ndarray,
         ndotV_flat: np.ndarray,
         qB_flat: np.ndarray,
+        tau: float,
         owner_elem_flat: np.ndarray,
         owner_node_ids_flat: np.ndarray,
         owner_wratio_flat: np.ndarray,
@@ -162,11 +165,12 @@ if _NUMBA_AVAILABLE:
                 qP = qB_flat[face_idx, i]
                 ndv = ndotV_flat[face_idx, i]
 
-                if ndv < 0.0:
+                coeff = 0.5 * (ndv - (1.0 - tau) * abs(ndv))
+                if coeff != 0.0:
                     surface_rhs[k, m_id] += (
                         scale
                         * owner_wratio_flat[face_idx, i]
-                        * ndv
+                        * coeff
                         * (qM - qP)
                     )
 
@@ -190,22 +194,24 @@ if _NUMBA_AVAILABLE:
                 qMa = q_elem[ka, a_mid]
                 qPa = q_elem[kb, a_nid]
                 ndv_a = ndotV_flat[fa, i]
-                if ndv_a < 0.0:
+                coeff_a = 0.5 * (ndv_a - (1.0 - tau) * abs(ndv_a))
+                if coeff_a != 0.0:
                     surface_rhs[ka, a_mid] += (
                         scale_a
                         * owner_wratio_flat[fa, i]
-                        * ndv_a
+                        * coeff_a
                         * (qMa - qPa)
                     )
 
                 qMb = q_elem[kb, b_mid]
                 qPb = q_elem[ka, b_nid]
                 ndv_b = ndotV_flat[fb, i]
-                if ndv_b < 0.0:
+                coeff_b = 0.5 * (ndv_b - (1.0 - tau) * abs(ndv_b))
+                if coeff_b != 0.0:
                     surface_rhs[kb, b_mid] += (
                         scale_b
                         * owner_wratio_flat[fb, i]
-                        * ndv_b
+                        * coeff_b
                         * (qMb - qPb)
                     )
 
@@ -323,6 +329,34 @@ def upwind_penalty_simplified(
         raise ValueError("ndotV, qM, qP must have the same shape.")
 
     return np.minimum(ndotV, 0.0) * (qM - qP)
+
+
+def numerical_flux_penalty(
+    ndotV: np.ndarray,
+    qM: np.ndarray,
+    qP: np.ndarray,
+    tau: float = 0.0,
+) -> np.ndarray:
+    """
+    Penalty term associated with the upwind-family numerical flux.
+
+    For `tau=0`, this reduces to the pure-upwind shortcut
+
+        p = min(n·V, 0) * (qM - qP).
+    """
+    ndotV = np.asarray(ndotV, dtype=float)
+    qM = np.asarray(qM, dtype=float)
+    qP = np.asarray(qP, dtype=float)
+
+    if ndotV.shape != qM.shape or qM.shape != qP.shape:
+        raise ValueError("ndotV, qM, qP must have the same shape.")
+
+    tau = float(tau)
+    if tau == 0.0:
+        return upwind_penalty_simplified(ndotV=ndotV, qM=qM, qP=qP)
+
+    coeff = 0.5 * (ndotV - (1.0 - tau) * np.abs(ndotV))
+    return coeff * (qM - qP)
 
 def fill_boundary_exterior_state_upwind(
     qM: np.ndarray,
@@ -944,7 +978,7 @@ def surface_term_from_exchange(
     volume_split_cache: dict | None = None,
 ) -> tuple[np.ndarray, dict]:
     """
-    Surface term using actual interior face exchange plus exact inflow boundary data.
+    Surface term using actual interior face exchange plus prescribed boundary traces.
 
     Current scope
     -------------
@@ -1057,6 +1091,7 @@ def surface_term_from_exchange(
                     q_elem=q_elem_numba,
                     ndotV_flat=ndotV_flat,
                     qB_flat=qB_flat,
+                    tau=float(tau),
                     owner_elem_flat=cache["owner_elem_flat_numba"],
                     owner_node_ids_flat=cache["owner_node_ids_flat_numba"],
                     owner_wratio_flat=cache["owner_wratio_flat_numba"],
@@ -1072,6 +1107,7 @@ def surface_term_from_exchange(
                     q_elem=q_elem_numba,
                     ndotV_flat=ndotV_flat,
                     qB_flat=qB_flat,
+                    tau=float(tau),
                     owner_elem_flat=cache["owner_elem_flat_numba"],
                     owner_node_ids_flat=cache["owner_node_ids_flat_numba"],
                     owner_wratio_flat=cache["owner_wratio_flat_numba"],
@@ -1122,7 +1158,12 @@ def surface_term_from_exchange(
 
             qP_flat[boundary_flat] = qB_flat[boundary_flat]
 
-        p = np.minimum(ndotV_flat, 0.0) * (qM_flat - qP_flat)
+        p = numerical_flux_penalty(
+            ndotV=ndotV_flat,
+            qM=qM_flat,
+            qP=qP_flat,
+            tau=tau,
+        )
         p = p.reshape(K, 3, nfp)
         surface_rhs = _lift_surface_penalty_to_volume(
             p,
@@ -1187,11 +1228,11 @@ def surface_term_from_exchange(
         q_boundary_exact=qB,
     )
 
-    # pure upwind simplification from the document
-    p = upwind_penalty_simplified(
+    p = numerical_flux_penalty(
         ndotV=ndotV,
         qM=qM,
         qP=qP_filled,
+        tau=tau,
     )
     surface_rhs = _lift_surface_penalty_to_volume(
         p,
@@ -1243,9 +1284,6 @@ def rhs_split_conservative_exchange(
     compute_mismatches: bool = True,
     return_diagnostics: bool = True,
     use_numba: bool | None = None,
-    state_projector: np.ndarray | None = None,
-    state_projector_T: np.ndarray | None = None,
-    state_projector_mode: str = "both",
     surface_backend: str | None = None,
     surface_cache: dict | None = None,
     ndotV_precomputed: np.ndarray | None = None,
@@ -1262,34 +1300,6 @@ def rhs_split_conservative_exchange(
         RHS = volume_rhs + surface_rhs
     """
     q_work = np.asarray(q_elem, dtype=float)
-    projector_mat = None
-    projector_mode = "both"
-    if (state_projector is not None) and (state_projector_T is not None):
-        raise ValueError("Provide only one of state_projector or state_projector_T.")
-
-    if state_projector_T is not None:
-        projector_mat = np.asarray(state_projector_T, dtype=float)
-        if projector_mat.ndim != 2 or projector_mat.shape[0] != projector_mat.shape[1]:
-            raise ValueError("state_projector_T must be a square 2D array.")
-        if projector_mat.shape[0] != q_work.shape[1]:
-            raise ValueError("state_projector_T size must match q_elem.shape[1].")
-        projector_mode = str(state_projector_mode).strip().lower()
-        if projector_mode not in ("both", "pre", "post"):
-            raise ValueError("state_projector_mode must be one of: 'both', 'pre', 'post'.")
-        if projector_mode in ("both", "pre"):
-            q_work = q_work @ projector_mat
-    elif state_projector is not None:
-        projector = np.asarray(state_projector, dtype=float)
-        if projector.ndim != 2 or projector.shape[0] != projector.shape[1]:
-            raise ValueError("state_projector must be a square 2D array.")
-        if projector.shape[0] != q_work.shape[1]:
-            raise ValueError("state_projector size must match q_elem.shape[1].")
-        projector_mat = projector.T
-        projector_mode = str(state_projector_mode).strip().lower()
-        if projector_mode not in ("both", "pre", "post"):
-            raise ValueError("state_projector_mode must be one of: 'both', 'pre', 'post'.")
-        if projector_mode in ("both", "pre"):
-            q_work = q_work @ projector_mat
 
     volume_rhs = volume_term_split_conservative(
         q_elem=q_work,
@@ -1328,13 +1338,9 @@ def rhs_split_conservative_exchange(
     if not return_diagnostics:
         total_rhs = volume_rhs
         total_rhs += surface_rhs
-        if projector_mat is not None and projector_mode in ("both", "post"):
-            total_rhs = total_rhs @ projector_mat
         return total_rhs, {}
 
     total_rhs = volume_rhs + surface_rhs
-    if projector_mat is not None and projector_mode in ("both", "post"):
-        total_rhs = total_rhs @ projector_mat
 
     diagnostics = dict(surface_diag)
     diagnostics["volume_rhs"] = volume_rhs
