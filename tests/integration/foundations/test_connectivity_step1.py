@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import numpy as np
 
-from geometry import (
-    structured_square_tri_mesh,
-    validate_mesh_orientation,
+from geometry.connectivity import (
     build_face_connectivity,
     validate_face_connectivity,
+)
+from geometry.mesh_structured import (
+    structured_square_tri_mesh,
+    validate_mesh_orientation,
 )
 
 

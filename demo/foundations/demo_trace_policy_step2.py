@@ -1,17 +1,18 @@
 from __future__ import annotations
 
-from pathlib import Path
-import numpy as np
 import matplotlib.pyplot as plt
+import numpy as np
 
-from data import load_table1_rule, load_table2_rule
-from geometry import reference_triangle_vertices
-from operators import (
-    vandermonde2d,
+from data.table1_rules import load_table1_rule
+from data.table2_rules import load_table2_rule
+from experiments.output_paths import photo_output_dir
+from geometry.reference_triangle import reference_triangle_vertices
+from operators.trace_policy import (
     build_trace_policy,
     evaluate_embedded_face_values,
     evaluate_projected_face_values,
 )
+from operators.vandermonde2d import vandermonde2d
 
 
 def _triangle_closed(vertices: np.ndarray) -> np.ndarray:
@@ -59,8 +60,7 @@ def _plot_face_ordered_points(ax, trace: dict, face_color: dict[int, str]) -> No
 
 
 def main() -> None:
-    output_dir = Path(__file__).resolve().parents[2] / "photo"
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir = photo_output_dir(__file__, "trace_policy_step2")
 
     vertices = reference_triangle_vertices()
 

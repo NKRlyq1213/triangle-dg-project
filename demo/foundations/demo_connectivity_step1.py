@@ -4,11 +4,14 @@ from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 
-from geometry import (
-    structured_square_tri_mesh,
-    validate_mesh_orientation,
+from experiments.output_paths import photo_output_dir
+from geometry.connectivity import (
     build_face_connectivity,
     validate_face_connectivity,
+)
+from geometry.mesh_structured import (
+    structured_square_tri_mesh,
+    validate_mesh_orientation,
 )
 
 
@@ -283,8 +286,7 @@ def _expected_truth_2x2() -> dict[str, np.ndarray]:
 
 
 def main() -> None:
-    output_dir = Path(__file__).resolve().parents[2] / "photo"
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir = photo_output_dir(__file__, "connectivity_step1")
 
     VX, VY, EToV = structured_square_tri_mesh(
         nx=3,

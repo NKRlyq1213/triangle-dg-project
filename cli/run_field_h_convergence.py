@@ -1,0 +1,41 @@
+from __future__ import annotations
+
+from experiments.field_h_convergence import (
+    FieldHConvergenceConfig,
+    print_results_table,
+    run_field_h_convergence,
+    save_results_csv,
+)
+from experiments.output_paths import experiments_output_dir
+
+
+def main() -> None:
+    output_dir = experiments_output_dir(__file__, "field_h_convergence")
+
+    config = FieldHConvergenceConfig(
+        table_name="table1",
+        order=4,
+        N=4,
+        diagonal="anti",
+        mesh_levels=(1, 2, 4, 8, 16, 32, 64, 128, 256),
+        eval_resolution=12,
+        x0=0.5,
+        y0=0.5,
+        sigma=0.16,
+        verbose=True,
+    )
+
+    results = run_field_h_convergence(config)
+
+    csv_path = output_dir / "field_h_convergence_table1_order4_N4_anti.csv"
+    print("Field h-convergence table1_order4_N4")
+    print()
+    print_results_table(results)
+
+    save_results_csv(results, str(csv_path))
+    print()
+    print("[OK] wrote " + str(csv_path))
+
+
+if __name__ == "__main__":
+    main()

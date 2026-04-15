@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import matplotlib.pyplot as plt
 import numpy as np
-from pathlib import Path
 
 from data.table2_rules import load_table2_rule
+from experiments.output_paths import photo_output_dir
 from geometry.reference_triangle import reference_triangle_vertices, reference_triangle_area
 from geometry.sampling import centroid_star_sampling
 from operators.vandermonde2d import vandermonde2d
@@ -13,8 +13,7 @@ from problems.analytic_fields import ground_truth_function
 from visualization.radial_plot import plot_radial_field, plot_radial_profile
 
 def main() -> None:
-    output_dir = Path(__file__).resolve().parents[2] / "photo"
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir = photo_output_dir(__file__, "radial_sampling_table2")
 
     vertices = reference_triangle_vertices()
     area = reference_triangle_area()

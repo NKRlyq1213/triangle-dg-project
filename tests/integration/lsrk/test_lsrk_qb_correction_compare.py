@@ -5,14 +5,17 @@ import pytest
 
 from experiments.lsrk_h_convergence import (
     LSRKHConvergenceConfig,
-    build_sinx_rk_stage_boundary_correction,
-    run_lsrk_h_convergence,
-    run_lsrk_h_convergence_compare_qb_correction,
+    _resolve_test_function_spec,
+    build_rk_stage_boundary_correction,
+    run_lsrk_study,
 )
 
 
-def test_sinx_rk_stage_boundary_correction_callback_shape() -> None:
-    corr = build_sinx_rk_stage_boundary_correction(dt=1.0e-2)
+def test_rk_stage_boundary_correction_callback_shape() -> None:
+    corr = build_rk_stage_boundary_correction(
+        dt=1.0e-2,
+        profile=_resolve_test_function_spec("sin2pi_x"),
+    )
 
     x_face = np.linspace(-1.0, 1.0, 6, dtype=float).reshape(1, 3, 2)
     y_face = np.zeros_like(x_face)
@@ -41,7 +44,7 @@ def test_compare_qb_correction_runs_for_small_case() -> None:
         verbose=False,
     )
 
-    compared = run_lsrk_h_convergence_compare_qb_correction(cfg)
+    compared = run_lsrk_study(cfg, qb_mode="compare")
 
     assert set(compared.keys()) == {"baseline", "rk_stage_correction"}
 
@@ -50,7 +53,7 @@ def test_compare_qb_correction_runs_for_small_case() -> None:
     corrected_row = compared["rk_stage_correction"][tf_key][0]
 
     assert baseline_row["q_boundary_correction_kind"] == "none"
-    assert corrected_row["q_boundary_correction_kind"] == "sinx_rk_stage"
+    assert corrected_row["q_boundary_correction_kind"] == "rk_stage"
 
 
 def test_config_rejects_mixed_qb_correction_sources() -> None:
@@ -60,10 +63,10 @@ def test_config_rejects_mixed_qb_correction_sources() -> None:
     cfg = LSRKHConvergenceConfig(
         mesh_levels=(1,),
         tf_values=(0.1,),
-        use_sinx_rk_stage_boundary_correction=True,
+        use_rk_stage_boundary_correction=True,
         q_boundary_correction=custom_corr,
         verbose=False,
     )
 
     with pytest.raises(ValueError, match="either"):
-        run_lsrk_h_convergence(cfg)
+        run_lsrk_study(cfg, qb_mode="off")

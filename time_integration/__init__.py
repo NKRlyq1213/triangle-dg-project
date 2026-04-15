@@ -1,19 +1,13 @@
-from .lsrk54 import lsrk54_step, integrate_lsrk54
-from .CFL import (
-    triangle_edge_lengths,
-    triangle_area,
-    triangle_min_altitude,
-    mesh_min_altitude,
-    cfl_dt_from_h,
-    vmax_from_uv,
-)
+from __future__ import annotations
+
+from .CFL import cfl_dt_from_h, mesh_min_altitude, vmax_from_uv
+from .lsrk54 import BLOWUP_BREAK_ABS, integrate_lsrk54, lsrk54_step
+
 __all__ = [
-    "lsrk54_step",
-    "integrate_lsrk54",
-    "triangle_edge_lengths",
-    "triangle_area",
-    "triangle_min_altitude",
-    "mesh_min_altitude",
     "cfl_dt_from_h",
+    "mesh_min_altitude",
     "vmax_from_uv",
+    "BLOWUP_BREAK_ABS",
+    "integrate_lsrk54",
+    "lsrk54_step",
 ]

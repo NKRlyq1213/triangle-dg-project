@@ -36,19 +36,24 @@ from .exchange import (
 )
 
 from .rhs_split_conservative_exact_trace import (
-    volume_term_split_conservative,
+    volume_term_split_conservative as volume_term_split_conservative_exact_trace,
     surface_term_from_exact_trace,
-    upwind_flux_and_penalty,
+    upwind_flux_and_penalty as upwind_flux_and_penalty_exact_trace,
 )
 
 from .rhs_split_conservative_exchange import (
-    volume_term_split_conservative,
-    upwind_flux_and_penalty,
+    volume_term_split_conservative as volume_term_split_conservative_exchange,
+    upwind_flux_and_penalty as upwind_flux_and_penalty_exchange,
     upwind_penalty_simplified,
     fill_exterior_state,
     fill_boundary_exterior_state_upwind,
     surface_term_from_exchange,
 )
+
+# Backward-compatible aliases keep existing import behavior on exchange backend.
+volume_term_split_conservative = volume_term_split_conservative_exchange
+upwind_flux_and_penalty = upwind_flux_and_penalty_exchange
+
 __all__ = [
     "vandermonde2d",
     "grad_vandermonde2d",
@@ -76,8 +81,12 @@ __all__ = [
     "pair_face_traces",
     "interior_face_pair_mismatches",
     "volume_term_split_conservative",
+    "volume_term_split_conservative_exact_trace",
+    "volume_term_split_conservative_exchange",
     "surface_term_from_exact_trace",
     "upwind_flux_and_penalty",
+    "upwind_flux_and_penalty_exact_trace",
+    "upwind_flux_and_penalty_exchange",
     "upwind_penalty_simplified",
     "fill_exterior_state",
     "fill_boundary_exterior_state_upwind",

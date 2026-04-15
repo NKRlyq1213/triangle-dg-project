@@ -11,6 +11,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from data.table1_rules import load_table1_rule
 from data.table2_rules import load_table2_rule
+from experiments.output_paths import photo_output_dir
 from geometry.reference_triangle import (
     reference_triangle_area,
     reference_triangle_vertices,
@@ -85,8 +86,7 @@ def report_error(name: str, num: np.ndarray, exact: np.ndarray) -> None:
 
 
 def main() -> None:
-    output_dir = Path(__file__).resolve().parents[2] / "photo" / "differentiation_photo"
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir = photo_output_dir(__file__, "differentiation_weighted")
     #==================================================================
     #=====================table 1======================================
     #==================================================================

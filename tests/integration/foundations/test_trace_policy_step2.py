@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import numpy as np
 
-from data import load_table1_rule, load_table2_rule
-from operators import (
-    vandermonde2d,
+from data.table1_rules import load_table1_rule
+from data.table2_rules import load_table2_rule
+from operators.trace_policy import (
     build_trace_policy,
     evaluate_embedded_face_values,
     evaluate_projected_face_values,
 )
+from operators.vandermonde2d import vandermonde2d
 
 
 def _check_face_equation(rs_face: np.ndarray, face_id: int, tol: float = 1e-12) -> None:

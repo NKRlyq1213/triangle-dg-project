@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 
-from data import load_table1_rule, load_table2_rule
+from data.table1_rules import load_table1_rule
+from data.table2_rules import load_table2_rule
+from experiments.output_paths import photo_output_dir
 from geometry.display_points import build_display_points
 from geometry.reference_triangle import reference_triangle_area, reference_triangle_vertices
 from operators.reconstruction import evaluate_modal_expansion, fit_modal_coefficients_weighted
@@ -29,8 +30,7 @@ def main() -> None:
     parser.add_argument("--case", type=str, default="smooth_bump")
     args = parser.parse_args()
 
-    output_dir = Path(__file__).resolve().parents[2] / "photo"
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir = photo_output_dir(__file__, "surface3d")
 
     vertices = reference_triangle_vertices()
     area = reference_triangle_area()

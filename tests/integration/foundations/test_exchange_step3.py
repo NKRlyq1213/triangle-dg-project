@@ -2,18 +2,16 @@ from __future__ import annotations
 
 import numpy as np
 
-from data import load_table1_rule, load_table2_rule
-from geometry import (
+from data.table1_rules import load_table1_rule
+from data.table2_rules import load_table2_rule
+from geometry.affine_map import map_reference_nodes_to_all_elements
+from geometry.connectivity import build_face_connectivity
+from geometry.mesh_structured import (
     structured_square_tri_mesh,
     validate_mesh_orientation,
-    build_face_connectivity,
-    map_reference_nodes_to_all_elements,
 )
-from operators import (
-    build_trace_policy,
-    pair_face_traces,
-    interior_face_pair_mismatches,
-)
+from operators.exchange import interior_face_pair_mismatches, pair_face_traces
+from operators.trace_policy import build_trace_policy
 
 
 def _global_poly(x: np.ndarray, y: np.ndarray) -> np.ndarray:

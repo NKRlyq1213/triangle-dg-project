@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 
 import matplotlib.pyplot as plt
 
-from data import load_table1_rule, load_table2_rule
+from data.table1_rules import load_table1_rule
+from data.table2_rules import load_table2_rule
+from experiments.output_paths import photo_output_dir
 from geometry.reference_triangle import reference_triangle_vertices
 from visualization.node_plot import plot_nodes
 
@@ -39,8 +40,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    output_dir = Path(__file__).resolve().parents[2] / "photo"
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir = photo_output_dir(__file__, "plot_nodes")
 
     vertices = reference_triangle_vertices()
 

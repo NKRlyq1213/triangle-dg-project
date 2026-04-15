@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import matplotlib.pyplot as plt
 import numpy as np
-from pathlib import Path
 
 from data.table1_rules import load_table1_rule
 from data.table2_rules import load_table2_rule
+from experiments.output_paths import photo_output_dir
 from geometry.reference_triangle import reference_triangle_vertices
 from geometry.mesh_structured import structured_square_tri_mesh
 from geometry.affine_map import map_reference_nodes_to_all_elements
@@ -50,8 +50,7 @@ def initial_field(
 
 
 def main():
-    output_dir = Path(__file__).resolve().parents[2] / "photo"
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir = photo_output_dir(__file__, "plot_mesh_nodes")
     # -----------------------------
     # user-configurable parameters
     # -----------------------------
