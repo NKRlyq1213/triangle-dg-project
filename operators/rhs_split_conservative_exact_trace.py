@@ -18,6 +18,13 @@ except Exception:  # pragma: no cover - optional acceleration
 from operators.divergence_split import mapped_divergence_split_2d
 from operators.exchange import evaluate_all_face_values
 from geometry.face_metrics import affine_face_geometry_from_mesh
+from geometry.connectivity import build_face_connectivity
+from operators.rhs_split_conservative_exchange import (
+    _apply_exact_source_q_correction,
+    _build_boundary_state_from_opposite_boundary,
+    build_face_tau_array,
+    build_surface_exchange_cache,
+)
 
 
 def _get_trace_face_arrays(trace: dict) -> tuple[np.ndarray, np.ndarray]:
@@ -180,7 +187,7 @@ def upwind_flux_and_penalty(
     ndotV: np.ndarray,
     qM: np.ndarray,
     qP: np.ndarray,
-    tau: float = 0.0,
+    tau: float | np.ndarray = 0.0,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     r"""
     Upwind-family numerical flux from the document:
@@ -194,65 +201,16 @@ def upwind_flux_and_penalty(
     ndotV = np.asarray(ndotV, dtype=float)
     qM = np.asarray(qM, dtype=float)
     qP = np.asarray(qP, dtype=float)
+    tau = np.asarray(tau, dtype=float)
+    if tau.ndim == 0:
+        tau = float(tau)
+    elif tau.shape != ndotV.shape:
+        raise ValueError("tau array must have the same shape as ndotV, qM, qP.")
 
     f = ndotV * qM
     fstar = 0.5 * (ndotV * qM + ndotV * qP) + 0.5 * (1.0 - tau) * np.abs(ndotV) * (qM - qP)
     p = f - fstar
     return f, fstar, p
-
-
-def _apply_q_correction_exact_trace(
-    q_exact_face: np.ndarray,
-    *,
-    x_face: np.ndarray,
-    y_face: np.ndarray,
-    t: float,
-    qM: np.ndarray,
-    ndotV: np.ndarray,
-    q_boundary_correction,
-    q_boundary_correction_mode: str,
-) -> np.ndarray:
-    """
-    Apply user-supplied q-correction on exact-trace faces.
-
-    In exact-trace mode there is no interior exchange table, so we expose all
-    faces through `is_boundary=True` to the callback, enabling correction on
-    interior faces as requested by the caller.
-    """
-    if q_boundary_correction is None:
-        return q_exact_face
-
-    mode = str(q_boundary_correction_mode).strip().lower()
-    if mode not in ("inflow", "boundary", "all"):
-        raise ValueError("q_boundary_correction_mode must be one of: 'inflow', 'boundary', 'all'.")
-
-    is_boundary_all = np.ones(q_exact_face.shape[:2], dtype=bool)
-
-    corr = q_boundary_correction(
-        x_face,
-        y_face,
-        t,
-        qM,
-        ndotV,
-        is_boundary_all,
-        q_exact_face,
-    )
-    corr = np.asarray(corr, dtype=float)
-    if corr.shape != q_exact_face.shape:
-        try:
-            corr = np.broadcast_to(corr, q_exact_face.shape)
-        except ValueError as exc:
-            raise ValueError(
-                "q_boundary_correction must return an array broadcastable to shape (K, 3, Nfp)."
-            ) from exc
-
-    qP = np.array(q_exact_face, dtype=float, copy=True)
-    if mode == "inflow":
-        mask = ndotV < 0.0
-    else:
-        mask = np.ones(q_exact_face.shape, dtype=bool)
-    qP[mask] += corr[mask]
-    return qP
 
 
 def surface_term_from_exact_trace(
@@ -266,13 +224,19 @@ def surface_term_from_exact_trace(
     velocity,
     t: float = 0.0,
     tau: float = 0.0,
+    tau_interior: float | None = None,
+    tau_qb: float | None = None,
     face_geom: dict | None = None,
+    q_boundary=None,
+    physical_boundary_mode: str = "exact_qb",
     q_boundary_correction=None,
-    q_boundary_correction_mode: str = "inflow",
+    q_boundary_correction_mode: str = "all",
     use_numba: bool = False,
+    conn: dict | None = None,
+    surface_cache: dict | None = None,
 ) -> tuple[np.ndarray, dict]:
     """
-    Surface term using exact trace values on all faces.
+    Surface term using exact trace values on interior faces.
 
     Current scope
     -------------
@@ -295,34 +259,83 @@ def surface_term_from_exact_trace(
 
     if face_geom is None:
         face_geom = affine_face_geometry_from_mesh(VX, VY, EToV, trace)
+    if conn is None:
+        conn = build_face_connectivity(VX, VY, EToV, classify_boundary="box")
+
+    cache = (
+        build_surface_exchange_cache(rule, trace, conn, face_geom)
+        if surface_cache is None
+        else surface_cache
+    )
 
     qM = evaluate_all_face_values(q_elem, trace)
 
-    x_face = face_geom["x_face"]
-    y_face = face_geom["y_face"]
-    nx = face_geom["nx"]
-    ny = face_geom["ny"]
+    x_face = np.asarray(cache["x_face"], dtype=float)
+    y_face = np.asarray(cache["y_face"], dtype=float)
+    nx = np.asarray(cache["nx"], dtype=float)
+    ny = np.asarray(cache["ny"], dtype=float)
+    is_boundary = np.asarray(cache["is_boundary"], dtype=bool)
+    interior_faces = ~is_boundary
 
-    qP_exact = q_exact(x_face, y_face, t)
+    qB_interior_exact = q_exact(x_face, y_face, t)
     u_face, v_face = velocity(x_face, y_face, t)
 
-    qP_exact = np.asarray(qP_exact, dtype=float)
+    qB_interior_exact = np.asarray(qB_interior_exact, dtype=float)
     u_face = np.asarray(u_face, dtype=float)
     v_face = np.asarray(v_face, dtype=float)
+    if qB_interior_exact.shape != qM.shape:
+        raise ValueError("q_exact must return arrays with shape (K, 3, Nfp).")
 
     ndotV = nx * u_face + ny * v_face
-    qP = _apply_q_correction_exact_trace(
-        qP_exact,
-        x_face=x_face,
-        y_face=y_face,
-        t=t,
-        qM=qM,
-        ndotV=ndotV,
-        q_boundary_correction=q_boundary_correction,
-        q_boundary_correction_mode=q_boundary_correction_mode,
+    boundary_mode = str(physical_boundary_mode).strip().lower()
+    if boundary_mode not in ("exact_qb", "opposite_boundary"):
+        raise ValueError("physical_boundary_mode must be one of: 'exact_qb', 'opposite_boundary'.")
+
+    qP = np.empty_like(qM)
+    qP[interior_faces] = qB_interior_exact[interior_faces]
+
+    qB_boundary_exact = None
+    if boundary_mode == "exact_qb":
+        q_boundary_fn = q_exact if q_boundary is None else q_boundary
+        qB_boundary_exact = np.asarray(q_boundary_fn(x_face, y_face, t), dtype=float)
+        if qB_boundary_exact.shape != qM.shape:
+            raise ValueError("q_boundary must return arrays with shape (K, 3, Nfp).")
+        qP[is_boundary] = qB_boundary_exact[is_boundary]
+    else:
+        qP_boundary = _build_boundary_state_from_opposite_boundary(q_elem=q_elem, cache=cache)
+        qP[is_boundary] = qP_boundary[is_boundary]
+
+    qB_exact = np.full_like(qM, np.nan)
+    qB_exact[interior_faces] = qB_interior_exact[interior_faces]
+    exact_source_faces = np.array(interior_faces, copy=True)
+    if qB_boundary_exact is not None:
+        qB_exact[is_boundary] = qB_boundary_exact[is_boundary]
+        exact_source_faces |= is_boundary
+
+    if q_boundary_correction is not None:
+        qP_exact_corrected = _apply_exact_source_q_correction(
+            q_exact_source=qB_exact,
+            x_face=x_face,
+            y_face=y_face,
+            t=t,
+            qM=qM,
+            ndotV=ndotV,
+            active_faces=exact_source_faces,
+            q_boundary_correction=q_boundary_correction,
+            q_boundary_correction_mode=q_boundary_correction_mode,
+        )
+        qP[exact_source_faces] = qP_exact_corrected[exact_source_faces]
+
+    tau_interior_eff, tau_qb_eff, tau_face = build_face_tau_array(
+        is_boundary=is_boundary,
+        face_shape=qM.shape,
+        physical_boundary_mode=boundary_mode,
+        tau=tau,
+        tau_interior=tau_interior,
+        tau_qb=tau_qb,
     )
 
-    f, fstar, p = upwind_flux_and_penalty(ndotV, qM, qP, tau=tau)
+    f, fstar, p = upwind_flux_and_penalty(ndotV, qM, qP, tau=tau_face)
 
     ws = np.asarray(rule["ws"], dtype=float).reshape(-1)
     face_node_ids, face_weights = _get_trace_face_arrays(trace)
@@ -337,10 +350,22 @@ def surface_term_from_exact_trace(
         use_numba=use_numba,
     )
 
+    qP_interior = np.full_like(qM, np.nan)
+    qP_interior[interior_faces] = qP[interior_faces]
+    qP_boundary = np.full_like(qM, np.nan)
+    qP_boundary[is_boundary] = qP[is_boundary]
+
     diagnostics = {
         "qM": qM,
-        "qP_exact": qP_exact,
+        "qP_interior": qP_interior,
+        "qP_boundary": qP_boundary,
+        "qB_exact": qB_exact,
+        "qP_exact": qB_exact,
         "qP": qP,
+        "tau_interior": float(tau_interior_eff),
+        "tau_qb": float(tau_qb_eff),
+        "tau_face": tau_face,
+        "physical_boundary_mode": boundary_mode,
         "u_face": u_face,
         "v_face": v_face,
         "ndotV": ndotV,
@@ -371,17 +396,24 @@ def rhs_split_conservative_exact_trace(
     velocity,
     t: float = 0.0,
     tau: float = 0.0,
+    tau_interior: float | None = None,
+    tau_qb: float | None = None,
     face_geom: dict | None = None,
+    q_boundary=None,
+    physical_boundary_mode: str = "exact_qb",
     q_boundary_correction=None,
-    q_boundary_correction_mode: str = "inflow",
+    q_boundary_correction_mode: str = "all",
     use_numba: bool = False,
+    conn: dict | None = None,
+    surface_cache: dict | None = None,
 ) -> tuple[np.ndarray, dict]:
     """
     Full semi-discrete RHS:
 
         RHS = volume_rhs + surface_rhs
 
-    under exact-trace substitution on all faces.
+    with exact-trace substitution on interior faces and physical-boundary
+    exterior data selected independently.
     """
     volume_rhs = volume_term_split_conservative(
         q_elem=q_elem,
@@ -403,10 +435,16 @@ def rhs_split_conservative_exact_trace(
         velocity=velocity,
         t=t,
         tau=tau,
+        tau_interior=tau_interior,
+        tau_qb=tau_qb,
         face_geom=face_geom,
+        q_boundary=q_boundary,
+        physical_boundary_mode=physical_boundary_mode,
         q_boundary_correction=q_boundary_correction,
         q_boundary_correction_mode=q_boundary_correction_mode,
         use_numba=use_numba,
+        conn=conn,
+        surface_cache=surface_cache,
     )
 
     total_rhs = volume_rhs + surface_rhs

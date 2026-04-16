@@ -187,7 +187,9 @@ but `cli.*` is the canonical entry point going forward.
 - `--test-function {sin2pi_x,sin2pi_y,sin2pi_xy}`
 - `--physical-boundary-mode {exact_qb,opposite_boundary}`
 - `--interior-trace-mode {exchange,exact_trace}`
-- `--tau FLOAT` controls the surface numerical flux; `tau=0` is pure upwind and larger `tau` reduces the `|n·V|(qM-qP)` penalty
+- `--tau FLOAT` sets the shared default for both tau roles
+- `--tau-interior FLOAT` overrides the penalty tau on interior faces and non-`exact_qb` exterior traces
+- `--tau-qb FLOAT` overrides the penalty tau on `physical-boundary-mode=exact_qb` faces only
 
 `cli.plot_lsrk_error_vs_time` visible parameters:
 
@@ -198,14 +200,17 @@ but `cli.*` is the canonical entry point going forward.
 - `--interior-trace-mode {exchange,exact_trace}`
 - `--qb-correction {off,on}`
 - `--surface-inverse-mass-mode {diagonal,projected}`
-- `--tau FLOAT` controls the surface numerical flux; `tau=0` is pure upwind and larger `tau` reduces the `|n·V|(qM-qP)` penalty
+- `--tau FLOAT` sets the shared default for both tau roles
+- `--tau-interior FLOAT` overrides the penalty tau on interior faces and non-`exact_qb` exterior traces
+- `--tau-qb FLOAT` overrides the penalty tau on `physical-boundary-mode=exact_qb` faces only
 - `--output PATH`
 
 Current constraints:
 
-- `interior-trace-mode=exact_trace` supports only `physical-boundary-mode=exact_qb`
 - `interior-trace-mode=exact_trace` does not support `surface-inverse-mass-mode=projected`
-- `physical-boundary-mode=opposite_boundary` disables qB correction
+- `qb-correction` requires at least one exact source: `interior-trace-mode=exact_trace` or `physical-boundary-mode=exact_qb`
+
+`tau=0` is still pure upwind. If `--tau-interior` or `--tau-qb` is omitted, it falls back to the shared `--tau` value.
 
 LSRK 指令常用參數與限制如上，完整細節可參考 [docs/experiments.md](docs/experiments.md)。
 

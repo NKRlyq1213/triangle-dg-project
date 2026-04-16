@@ -51,6 +51,10 @@ Visible parameters:
   Default: `exchange`
 - `--tau FLOAT`
   Default: `0.0`
+- `--tau-interior FLOAT`
+  Default: unset; falls back to `--tau`
+- `--tau-qb FLOAT`
+  Default: unset; falls back to `--tau`
 
 可見參數如上；若未指定，會採用 Default 值。
 
@@ -67,7 +71,9 @@ python -m cli.run_lsrk_h_convergence --preset quick --qb-correction compare
 python -m cli.run_lsrk_h_convergence --preset quick --qb-correction on
 python -m cli.run_lsrk_h_convergence --preset quick --test-function sin2pi_xy
 python -m cli.run_lsrk_h_convergence --preset quick --interior-trace-mode exact_trace
+python -m cli.run_lsrk_h_convergence --preset quick --interior-trace-mode exact_trace --physical-boundary-mode opposite_boundary
 python -m cli.run_lsrk_h_convergence --preset quick --tau 0.4
+python -m cli.run_lsrk_h_convergence --preset quick --tau-interior 0.1 --tau-qb 0.6
 ```
 
 Behavior notes:
@@ -77,7 +83,11 @@ Behavior notes:
 - `compare` writes separate baseline and corrected CSVs
 - `on` writes only the corrected run
 - `off` writes only the baseline run
-- `tau` is the surface numerical-flux parameter; `tau=0` is pure upwind, and larger `tau` reduces the `|n·V|(qM-qP)` penalty
+- `qb-correction` evolves exact-source traces via RK-stage correction instead of reapplying exact values at every stage
+- `tau=0` is pure upwind
+- `--tau` is the shared fallback value for both tau roles
+- `--tau-interior` applies to all interior faces and all non-`exact_qb` exterior traces
+- `--tau-qb` applies only to physical-boundary faces when `physical-boundary-mode=exact_qb`
 
 ## LSRK Error-vs-Time CLI / LSRK 誤差-時間 CLI
 
@@ -108,6 +118,10 @@ Visible parameters:
   Default: `diagonal`
 - `--tau FLOAT`
   Default: `0.0`
+- `--tau-interior FLOAT`
+  Default: unset; falls back to `--tau`
+- `--tau-qb FLOAT`
+  Default: unset; falls back to `--tau`
 - `--output PATH`
   Default: auto-generated path under `experiments_outputs/lsrk_error_vs_time/`
 
@@ -124,18 +138,23 @@ Examples:
 python -m cli.plot_lsrk_error_vs_time --mesh-level 8 --tf 1.0
 python -m cli.plot_lsrk_error_vs_time --mesh-levels 8 16 32 --tf 6.283185307179586 --test-function sin2pi_xy --qb-correction on
 python -m cli.plot_lsrk_error_vs_time --mesh-level 16 --interior-trace-mode exact_trace --physical-boundary-mode exact_qb
+python -m cli.plot_lsrk_error_vs_time --mesh-level 16 --interior-trace-mode exact_trace --physical-boundary-mode opposite_boundary
 python -m cli.plot_lsrk_error_vs_time --mesh-level 16 --tau 0.4
+python -m cli.plot_lsrk_error_vs_time --mesh-level 16 --tau-interior 0.1 --tau-qb 0.6
 ```
 
-`tau` controls the surface numerical flux via
+The penalty still uses
 `f* = 1/2[(n·V)qM + (n·V)qP] + (1-tau)/2 |n·V| (qM - qP)`;
-`tau=0` is pure upwind, and larger `tau` reduces the upwind penalty.
+`tau=0` is pure upwind.
+`--tau-interior` supplies `tau` on all interior faces and on `opposite_boundary` physical faces.
+`--tau-qb` supplies `tau` only on `physical-boundary-mode=exact_qb` faces.
+If a specialized tau is omitted, it falls back to `--tau`.
 
 ## Current Constraints / 目前限制
 
-- `interior-trace-mode=exact_trace` currently supports only `physical-boundary-mode=exact_qb`
 - `interior-trace-mode=exact_trace` does not support `surface-inverse-mass-mode=projected`
-- `physical-boundary-mode=opposite_boundary` disables qB correction even if `--qb-correction on` is requested
+- `qb-correction` requires at least one exact source:
+  `interior-trace-mode=exact_trace` or `physical-boundary-mode=exact_qb`
 
 以上限制為目前實作行為，若違反會在執行時拋出錯誤或忽略校正。
 
@@ -151,7 +170,7 @@ Ad hoc profiling, scratch, or preserved legacy artifacts should be written under
 
 LSRK h-convergence CSVs:
 
-- Base stem: `lsrk_h_convergence_{test_function}_tf{tf}_table1_order{order}_N{N}_{diagonal}_tau{tau}`
+- Base stem: `lsrk_h_convergence_{test_function}_tf{tf}_table1_order{order}_N{N}_{diagonal}_taui{tau_interior}_tauqb{tau_qb}`
 - Compare mode suffixes: `_baseline.csv`, `_rkstage_qb.csv`
 - Correction-only suffix: `_rkstage_qb_only.csv`
 - Quick runs append `_quick`
@@ -162,7 +181,7 @@ LSRK error-vs-time outputs:
 - Stored under `experiments_outputs/lsrk_error_vs_time/`
 - A `.png` plot and matching `.csv` are written with the same stem
 - The auto-generated stem includes `tf`, mesh levels, test function, boundary mode,
-  surface inverse mass mode, `tau`, qB mode, and optional trace mode
+  surface inverse mass mode, `tau_interior`, `tau_qb`, qB mode, and optional trace mode
 
 Current canonical layout:
 

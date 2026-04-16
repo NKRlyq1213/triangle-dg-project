@@ -97,7 +97,8 @@ if _NUMBA_AVAILABLE:
         q_elem: np.ndarray,
         ndotV_flat: np.ndarray,
         qB_flat: np.ndarray,
-        tau: float,
+        tau_interior: float,
+        tau_boundary: float,
         owner_elem_flat: np.ndarray,
         owner_node_ids_flat: np.ndarray,
         owner_wratio_flat: np.ndarray,
@@ -122,11 +123,13 @@ if _NUMBA_AVAILABLE:
 
                 if is_boundary:
                     qP = qB_flat[face_idx, i]
+                    tau_face = tau_boundary
                 else:
                     qP = q_elem[nbr_k, nbr_node_ids_flat[face_idx, i]]
+                    tau_face = tau_interior
 
                 ndv = ndotV_flat[face_idx, i]
-                coeff = 0.5 * (ndv - (1.0 - tau) * abs(ndv))
+                coeff = 0.5 * (ndv - (1.0 - tau_face) * abs(ndv))
                 if coeff != 0.0:
                     surface_rhs[k, m_id] += (
                         scale
@@ -141,7 +144,8 @@ if _NUMBA_AVAILABLE:
         q_elem: np.ndarray,
         ndotV_flat: np.ndarray,
         qB_flat: np.ndarray,
-        tau: float,
+        tau_interior: float,
+        tau_boundary: float,
         owner_elem_flat: np.ndarray,
         owner_node_ids_flat: np.ndarray,
         owner_wratio_flat: np.ndarray,
@@ -165,7 +169,7 @@ if _NUMBA_AVAILABLE:
                 qP = qB_flat[face_idx, i]
                 ndv = ndotV_flat[face_idx, i]
 
-                coeff = 0.5 * (ndv - (1.0 - tau) * abs(ndv))
+                coeff = 0.5 * (ndv - (1.0 - tau_boundary) * abs(ndv))
                 if coeff != 0.0:
                     surface_rhs[k, m_id] += (
                         scale
@@ -194,7 +198,7 @@ if _NUMBA_AVAILABLE:
                 qMa = q_elem[ka, a_mid]
                 qPa = q_elem[kb, a_nid]
                 ndv_a = ndotV_flat[fa, i]
-                coeff_a = 0.5 * (ndv_a - (1.0 - tau) * abs(ndv_a))
+                coeff_a = 0.5 * (ndv_a - (1.0 - tau_interior) * abs(ndv_a))
                 if coeff_a != 0.0:
                     surface_rhs[ka, a_mid] += (
                         scale_a
@@ -206,7 +210,7 @@ if _NUMBA_AVAILABLE:
                 qMb = q_elem[kb, b_mid]
                 qPb = q_elem[ka, b_nid]
                 ndv_b = ndotV_flat[fb, i]
-                coeff_b = 0.5 * (ndv_b - (1.0 - tau) * abs(ndv_b))
+                coeff_b = 0.5 * (ndv_b - (1.0 - tau_interior) * abs(ndv_b))
                 if coeff_b != 0.0:
                     surface_rhs[kb, b_mid] += (
                         scale_b
@@ -283,11 +287,75 @@ def build_volume_split_cache(
     )
 
 
+def resolve_effective_taus(
+    *,
+    tau: float = 0.0,
+    tau_interior: float | None = None,
+    tau_qb: float | None = None,
+) -> tuple[float, float]:
+    tau_shared = float(tau)
+    tau_interior_eff = tau_shared if tau_interior is None else float(tau_interior)
+    tau_qb_eff = tau_shared if tau_qb is None else float(tau_qb)
+
+    if not np.isfinite(tau_shared):
+        raise ValueError("tau must be finite.")
+    if not np.isfinite(tau_interior_eff):
+        raise ValueError("tau_interior must be finite when provided.")
+    if not np.isfinite(tau_qb_eff):
+        raise ValueError("tau_qb must be finite when provided.")
+
+    return tau_interior_eff, tau_qb_eff
+
+
+def build_face_tau_array(
+    *,
+    is_boundary: np.ndarray,
+    face_shape: tuple[int, int, int],
+    physical_boundary_mode: str,
+    tau: float = 0.0,
+    tau_interior: float | None = None,
+    tau_qb: float | None = None,
+) -> tuple[float, float, np.ndarray]:
+    is_boundary = np.asarray(is_boundary, dtype=bool)
+    if is_boundary.shape != face_shape[:2]:
+        raise ValueError("is_boundary must have shape (K, 3) matching face_shape.")
+
+    tau_interior_eff, tau_qb_eff = resolve_effective_taus(
+        tau=tau,
+        tau_interior=tau_interior,
+        tau_qb=tau_qb,
+    )
+    tau_face = np.full(face_shape, tau_interior_eff, dtype=float)
+
+    if str(physical_boundary_mode).strip().lower() == "exact_qb":
+        tau_face[np.broadcast_to(is_boundary[:, :, None], face_shape)] = tau_qb_eff
+
+    return tau_interior_eff, tau_qb_eff, tau_face
+
+
+def _coerce_tau_argument(
+    tau: float | np.ndarray,
+    *,
+    shape: tuple[int, ...],
+) -> float | np.ndarray:
+    tau_arr = np.asarray(tau, dtype=float)
+    if tau_arr.ndim == 0:
+        tau_scalar = float(tau_arr)
+        if not np.isfinite(tau_scalar):
+            raise ValueError("tau must be finite.")
+        return tau_scalar
+    if tau_arr.shape != shape:
+        raise ValueError("tau array must have the same shape as ndotV, qM, qP.")
+    if not np.all(np.isfinite(tau_arr)):
+        raise ValueError("tau array must be finite.")
+    return tau_arr
+
+
 def upwind_flux_and_penalty(
     ndotV: np.ndarray,
     qM: np.ndarray,
     qP: np.ndarray,
-    tau: float = 0.0,
+    tau: float | np.ndarray = 0.0,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     r"""
     Numerical flux from the document:
@@ -301,9 +369,13 @@ def upwind_flux_and_penalty(
     ndotV = np.asarray(ndotV, dtype=float)
     qM = np.asarray(qM, dtype=float)
     qP = np.asarray(qP, dtype=float)
+    tau_value = _coerce_tau_argument(tau, shape=ndotV.shape)
 
     f = ndotV * qM
-    fstar = 0.5 * (ndotV * qM + ndotV * qP) + 0.5 * (1.0 - tau) * np.abs(ndotV) * (qM - qP)
+    fstar = (
+        0.5 * (ndotV * qM + ndotV * qP)
+        + 0.5 * (1.0 - tau_value) * np.abs(ndotV) * (qM - qP)
+    )
     p = f - fstar
     return f, fstar, p
 
@@ -335,7 +407,7 @@ def numerical_flux_penalty(
     ndotV: np.ndarray,
     qM: np.ndarray,
     qP: np.ndarray,
-    tau: float = 0.0,
+    tau: float | np.ndarray = 0.0,
 ) -> np.ndarray:
     """
     Penalty term associated with the upwind-family numerical flux.
@@ -351,11 +423,11 @@ def numerical_flux_penalty(
     if ndotV.shape != qM.shape or qM.shape != qP.shape:
         raise ValueError("ndotV, qM, qP must have the same shape.")
 
-    tau = float(tau)
-    if tau == 0.0:
+    tau_value = _coerce_tau_argument(tau, shape=ndotV.shape)
+    if isinstance(tau_value, float) and tau_value == 0.0:
         return upwind_penalty_simplified(ndotV=ndotV, qM=qM, qP=qP)
 
-    coeff = 0.5 * (ndotV - (1.0 - tau) * np.abs(ndotV))
+    coeff = 0.5 * (ndotV - (1.0 - tau_value) * np.abs(ndotV))
     return coeff * (qM - qP)
 
 def fill_boundary_exterior_state_upwind(
@@ -431,28 +503,29 @@ def fill_exterior_state(
     return qP
 
 
-def _apply_boundary_q_correction(
-    q_boundary_exact: np.ndarray,
+def _apply_exact_source_q_correction(
+    q_exact_source: np.ndarray,
     *,
     x_face: np.ndarray,
     y_face: np.ndarray,
     t: float,
     qM: np.ndarray,
     ndotV: np.ndarray,
-    is_boundary: np.ndarray,
+    active_faces: np.ndarray,
     q_boundary_correction,
     q_boundary_correction_mode: str,
 ) -> np.ndarray:
     """
-    Apply user-supplied boundary correction to exact boundary traces.
+    Apply user-supplied correction to exact-source traces.
 
     Expected callback signature:
-        corr = q_boundary_correction(x_face, y_face, t, qM, ndotV, is_boundary, q_boundary_exact)
+        corr = q_boundary_correction(x_face, y_face, t, qM, ndotV, active_faces, q_exact_source)
 
-    where corr can be broadcast to shape (K, 3, Nfp).
+    where corr can be broadcast to shape (K, 3, Nfp). `active_faces` marks
+    which faces currently use exact data as the exterior source.
     """
     if q_boundary_correction is None:
-        return q_boundary_exact
+        return q_exact_source
 
     mode = str(q_boundary_correction_mode).strip().lower()
     if mode not in ("inflow", "boundary", "all"):
@@ -464,26 +537,26 @@ def _apply_boundary_q_correction(
         t,
         qM,
         ndotV,
-        is_boundary,
-        q_boundary_exact,
+        active_faces,
+        q_exact_source,
     )
     corr = np.asarray(corr, dtype=float)
-    if corr.shape != q_boundary_exact.shape:
+    if corr.shape != q_exact_source.shape:
         try:
-            corr = np.broadcast_to(corr, q_boundary_exact.shape)
+            corr = np.broadcast_to(corr, q_exact_source.shape)
         except ValueError as exc:
             raise ValueError(
                 "q_boundary_correction must return an array broadcastable to shape (K, 3, Nfp)."
             ) from exc
 
-    qB = np.array(q_boundary_exact, dtype=float, copy=True)
-    bd = np.asarray(is_boundary, dtype=bool)[:, :, None]
+    qP = np.array(q_exact_source, dtype=float, copy=True)
+    active = np.asarray(active_faces, dtype=bool)[:, :, None]
     if mode == "inflow":
-        mask = bd & (ndotV < 0.0)
+        mask = active & (ndotV < 0.0)
     else:
-        mask = np.broadcast_to(bd, q_boundary_exact.shape)
-    qB[mask] += corr[mask]
-    return qB
+        mask = np.broadcast_to(active, q_exact_source.shape)
+    qP[mask] += corr[mask]
+    return qP
 
 
 def _pair_boundary_faces_by_axis(
@@ -964,6 +1037,8 @@ def surface_term_from_exchange(
     velocity,
     t: float = 0.0,
     tau: float = 0.0,
+    tau_interior: float | None = None,
+    tau_qb: float | None = None,
     compute_mismatches: bool = True,
     return_diagnostics: bool = True,
     use_numba: bool | None = None,
@@ -1030,17 +1105,35 @@ def surface_term_from_exchange(
     boundary_mode = str(physical_boundary_mode).strip().lower()
     if boundary_mode not in ("exact_qb", "opposite_boundary"):
         raise ValueError("physical_boundary_mode must be one of: 'exact_qb', 'opposite_boundary'.")
+    if q_boundary_correction is not None and boundary_mode != "exact_qb":
+        raise ValueError(
+            "q_boundary_correction requires an exact boundary source; "
+            "physical_boundary_mode='opposite_boundary' does not provide one."
+        )
 
+    qB_exact = None
     if boundary_mode == "exact_qb":
         if q_boundary is None:
             raise ValueError("q_boundary callback is required when physical_boundary_mode='exact_qb'.")
-        qB = q_boundary(x_face, y_face, t)
-        qB = np.asarray(qB, dtype=float)
+        qB_exact = np.asarray(q_boundary(x_face, y_face, t), dtype=float)
+        qP_boundary = np.array(qB_exact, dtype=float, copy=True)
     else:
-        qB = _build_boundary_state_from_opposite_boundary(q_elem=q_elem, cache=cache)
+        qP_boundary = _build_boundary_state_from_opposite_boundary(q_elem=q_elem, cache=cache)
 
-    if ndotV.shape != (K, 3, nfp) or qB.shape != (K, 3, nfp):
+    if ndotV.shape != (K, 3, nfp) or qP_boundary.shape != (K, 3, nfp):
         raise ValueError("velocity/boundary callbacks must return arrays with shape (K, 3, Nfp).")
+    if qB_exact is not None and qB_exact.shape != (K, 3, nfp):
+        raise ValueError("q_boundary callback must return arrays with shape (K, 3, Nfp).")
+
+    tau_interior_eff, tau_qb_eff, tau_face = build_face_tau_array(
+        is_boundary=cache["is_boundary"],
+        face_shape=(K, 3, nfp),
+        physical_boundary_mode=boundary_mode,
+        tau=tau,
+        tau_interior=tau_interior,
+        tau_qb=tau_qb,
+    )
+    tau_boundary_eff = tau_qb_eff if boundary_mode == "exact_qb" else tau_interior_eff
 
     qM_face_prefetched = None
     if q_boundary_correction is not None and boundary_mode == "exact_qb":
@@ -1049,14 +1142,14 @@ def surface_term_from_exchange(
         for jf in range(3):
             qM_face_prefetched[:, jf, :] = q_elem[:, ids_faces[jf]]
 
-        qB = _apply_boundary_q_correction(
-            q_boundary_exact=qB,
+        qP_boundary = _apply_exact_source_q_correction(
+            q_exact_source=qB_exact,
             x_face=x_face,
             y_face=y_face,
             t=t,
             qM=qM_face_prefetched,
             ndotV=ndotV,
-            is_boundary=cache["is_boundary"],
+            active_faces=cache["is_boundary"],
             q_boundary_correction=q_boundary_correction,
             q_boundary_correction_mode=q_boundary_correction_mode,
         )
@@ -1074,9 +1167,9 @@ def surface_term_from_exchange(
                 if ndotV_flat.shape != (K * 3, nfp):
                     raise ValueError("ndotV_flat_precomputed must have shape (K*3, Nfp).")
 
-            qB_flat = qB.reshape(K * 3, nfp)
-            if qB_flat.dtype != np.float64 or (not qB_flat.flags.c_contiguous):
-                qB_flat = np.ascontiguousarray(qB_flat, dtype=np.float64)
+            qP_boundary_flat = qP_boundary.reshape(K * 3, nfp)
+            if qP_boundary_flat.dtype != np.float64 or (not qP_boundary_flat.flags.c_contiguous):
+                qP_boundary_flat = np.ascontiguousarray(qP_boundary_flat, dtype=np.float64)
 
             q_elem_numba = q_elem
             if q_elem_numba.dtype != np.float64 or (not q_elem_numba.flags.c_contiguous):
@@ -1090,8 +1183,9 @@ def surface_term_from_exchange(
                 _face_major_surface_rhs_pair_kernel_inplace(
                     q_elem=q_elem_numba,
                     ndotV_flat=ndotV_flat,
-                    qB_flat=qB_flat,
-                    tau=float(tau),
+                    qB_flat=qP_boundary_flat,
+                    tau_interior=float(tau_interior_eff),
+                    tau_boundary=float(tau_boundary_eff),
                     owner_elem_flat=cache["owner_elem_flat_numba"],
                     owner_node_ids_flat=cache["owner_node_ids_flat_numba"],
                     owner_wratio_flat=cache["owner_wratio_flat_numba"],
@@ -1106,8 +1200,9 @@ def surface_term_from_exchange(
                 _face_major_surface_rhs_flat_kernel_inplace(
                     q_elem=q_elem_numba,
                     ndotV_flat=ndotV_flat,
-                    qB_flat=qB_flat,
-                    tau=float(tau),
+                    qB_flat=qP_boundary_flat,
+                    tau_interior=float(tau_interior_eff),
+                    tau_boundary=float(tau_boundary_eff),
                     owner_elem_flat=cache["owner_elem_flat_numba"],
                     owner_node_ids_flat=cache["owner_node_ids_flat_numba"],
                     owner_wratio_flat=cache["owner_wratio_flat_numba"],
@@ -1129,7 +1224,7 @@ def surface_term_from_exchange(
 
         qM_flat = qM.reshape(K * 3, nfp)
         ndotV_flat = ndotV.reshape(K * 3, nfp)
-        qB_flat = qB.reshape(K * 3, nfp)
+        qP_boundary_flat = qP_boundary.reshape(K * 3, nfp)
 
         interior_flat = cache["interior_flat"]
         boundary_flat = cache["boundary_flat"]
@@ -1147,7 +1242,7 @@ def surface_term_from_exchange(
                 qP_before_flat[flip_interior] = qP_before_flat[flip_interior, ::-1]
 
             qP_flat = qP_before_flat.copy()
-            qP_flat[boundary_flat] = qB_flat[boundary_flat]
+            qP_flat[boundary_flat] = qP_boundary_flat[boundary_flat]
         else:
             qP_flat = np.empty_like(qM_flat)
             qP_flat[interior_flat] = qM_flat[nbr_flat[interior_flat]]
@@ -1156,13 +1251,13 @@ def surface_term_from_exchange(
             if np.any(flip_interior):
                 qP_flat[flip_interior] = qP_flat[flip_interior, ::-1]
 
-            qP_flat[boundary_flat] = qB_flat[boundary_flat]
+            qP_flat[boundary_flat] = qP_boundary_flat[boundary_flat]
 
         p = numerical_flux_penalty(
             ndotV=ndotV_flat,
             qM=qM_flat,
             qP=qP_flat,
-            tau=tau,
+            tau=tau_face.reshape(K * 3, nfp),
         )
         p = p.reshape(K, 3, nfp)
         surface_rhs = _lift_surface_penalty_to_volume(
@@ -1193,9 +1288,15 @@ def surface_term_from_exchange(
 
         diagnostics = {
             "qM": qM,
+            "qP_interior": qP_before,
             "qP_before_boundary_fill": qP_before,
+            "qP_boundary": qP_boundary,
             "qP": qP_filled,
-            "qB": qB,
+            "qB_exact": qB_exact,
+            "qB": qB_exact,
+            "tau_interior": float(tau_interior_eff),
+            "tau_qb": float(tau_qb_eff),
+            "tau_face": tau_face,
             "physical_boundary_mode": boundary_mode,
             "u_face": u_face,
             "v_face": v_face,
@@ -1225,14 +1326,14 @@ def surface_term_from_exchange(
     qP_filled = fill_exterior_state(
         qP_exchange=qP,
         is_boundary=is_boundary,
-        q_boundary_exact=qB,
+        q_boundary_exact=qP_boundary,
     )
 
     p = numerical_flux_penalty(
         ndotV=ndotV,
         qM=qM,
         qP=qP_filled,
-        tau=tau,
+        tau=tau_face,
     )
     surface_rhs = _lift_surface_penalty_to_volume(
         p,
@@ -1248,9 +1349,15 @@ def surface_term_from_exchange(
 
     diagnostics = {
         "qM": qM,
+        "qP_interior": np.asarray(paired["uP"], dtype=float),
         "qP_before_boundary_fill": np.asarray(paired["uP"], dtype=float),
+        "qP_boundary": qP_boundary,
         "qP": qP_filled,
-        "qB": qB,
+        "qB_exact": qB_exact,
+        "qB": qB_exact,
+        "tau_interior": float(tau_interior_eff),
+        "tau_qb": float(tau_qb_eff),
+        "tau_face": tau_face,
         "physical_boundary_mode": boundary_mode,
         "u_face": u_face,
         "v_face": v_face,
@@ -1281,6 +1388,8 @@ def rhs_split_conservative_exchange(
     velocity,
     t: float = 0.0,
     tau: float = 0.0,
+    tau_interior: float | None = None,
+    tau_qb: float | None = None,
     compute_mismatches: bool = True,
     return_diagnostics: bool = True,
     use_numba: bool | None = None,
@@ -1322,6 +1431,8 @@ def rhs_split_conservative_exchange(
         velocity=velocity,
         t=t,
         tau=tau,
+        tau_interior=tau_interior,
+        tau_qb=tau_qb,
         compute_mismatches=compute_mismatches,
         return_diagnostics=return_diagnostics,
         use_numba=use_numba,

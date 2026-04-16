@@ -289,8 +289,14 @@ def test_q_boundary_correction_inflow_and_all_modes() -> None:
 
     expected_inflow = np.array(qB_exact, copy=True)
     expected_inflow[inflow] += 0.25
-    assert np.allclose(diag_inflow["qB"], expected_inflow, atol=1e-12, rtol=1e-12)
-    assert np.allclose(diag_inflow["qB"][outflow], qB_exact[outflow], atol=1e-12, rtol=1e-12)
+    assert np.allclose(diag_inflow["qB_exact"], qB_exact, atol=1e-12, rtol=1e-12)
+    assert np.allclose(
+        diag_inflow["qP_boundary"][np.broadcast_to(bd, qB_exact.shape)],
+        expected_inflow[np.broadcast_to(bd, qB_exact.shape)],
+        atol=1e-12,
+        rtol=1e-12,
+    )
+    assert np.allclose(diag_inflow["qP"][outflow], qB_exact[outflow], atol=1e-12, rtol=1e-12)
 
     _, diag_all = surface_term_from_exchange(
         q_elem=fx["q0"],
@@ -313,7 +319,13 @@ def test_q_boundary_correction_inflow_and_all_modes() -> None:
 
     expected_all = np.array(qB_exact, copy=True)
     expected_all[np.broadcast_to(bd, qB_exact.shape)] += 0.25
-    assert np.allclose(diag_all["qB"], expected_all, atol=1e-12, rtol=1e-12)
+    assert np.allclose(diag_all["qB_exact"], qB_exact, atol=1e-12, rtol=1e-12)
+    assert np.allclose(
+        diag_all["qP_boundary"][np.broadcast_to(bd, qB_exact.shape)],
+        expected_all[np.broadcast_to(bd, qB_exact.shape)],
+        atol=1e-12,
+        rtol=1e-12,
+    )
 
 
 def test_tau_nonzero_uses_full_flux_formula_on_outflow_boundary() -> None:
@@ -369,6 +381,80 @@ def test_tau_nonzero_uses_full_flux_formula_on_outflow_boundary() -> None:
     assert np.max(np.abs(diag_tau["p"][outflow])) > 1e-8
 
 
+def test_split_tau_uses_tau_qb_only_on_exact_qb_boundary() -> None:
+    fx = _build_rhs_fixture()
+    t_eval = 0.125
+
+    tau_interior = 0.15
+    tau_qb = 0.7
+    _, diag = surface_term_from_exchange(
+        q_elem=fx["q0"],
+        rule=fx["rule"],
+        trace=fx["trace"],
+        conn=fx["conn"],
+        face_geom=fx["face_geom"],
+        q_boundary=q_boundary_sinx,
+        velocity=velocity_one_one,
+        t=t_eval,
+        tau=0.0,
+        tau_interior=tau_interior,
+        tau_qb=tau_qb,
+        compute_mismatches=False,
+        return_diagnostics=True,
+        use_numba=False,
+        surface_backend="face-major",
+        surface_cache=fx["surface_cache"],
+        physical_boundary_mode="exact_qb",
+    )
+
+    is_boundary = np.asarray(fx["conn"]["is_boundary"], dtype=bool)
+    expected_tau = np.full_like(diag["ndotV"], tau_interior, dtype=float)
+    expected_tau[is_boundary] = tau_qb
+    expected_p = 0.5 * (
+        np.asarray(diag["ndotV"], dtype=float)
+        - (1.0 - expected_tau) * np.abs(np.asarray(diag["ndotV"], dtype=float))
+    ) * (np.asarray(diag["qM"], dtype=float) - np.asarray(diag["qP"], dtype=float))
+
+    assert np.allclose(diag["tau_face"], expected_tau, atol=1e-12, rtol=1e-12)
+    assert np.allclose(diag["p"], expected_p, atol=1e-12, rtol=1e-12)
+
+
+def test_split_tau_ignores_tau_qb_for_opposite_boundary() -> None:
+    fx = _build_rhs_fixture()
+    t_eval = 0.125
+
+    tau_interior = 0.2
+    tau_qb = 0.85
+    _, diag = surface_term_from_exchange(
+        q_elem=fx["q0"],
+        rule=fx["rule"],
+        trace=fx["trace"],
+        conn=fx["conn"],
+        face_geom=fx["face_geom"],
+        q_boundary=q_boundary_sinx,
+        velocity=velocity_one_one,
+        t=t_eval,
+        tau=0.0,
+        tau_interior=tau_interior,
+        tau_qb=tau_qb,
+        compute_mismatches=False,
+        return_diagnostics=True,
+        use_numba=False,
+        surface_backend="face-major",
+        surface_cache=fx["surface_cache"],
+        physical_boundary_mode="opposite_boundary",
+    )
+
+    expected_tau = np.full_like(diag["ndotV"], tau_interior, dtype=float)
+    expected_p = 0.5 * (
+        np.asarray(diag["ndotV"], dtype=float)
+        - (1.0 - expected_tau) * np.abs(np.asarray(diag["ndotV"], dtype=float))
+    ) * (np.asarray(diag["qM"], dtype=float) - np.asarray(diag["qP"], dtype=float))
+
+    assert np.allclose(diag["tau_face"], expected_tau, atol=1e-12, rtol=1e-12)
+    assert np.allclose(diag["p"], expected_p, atol=1e-12, rtol=1e-12)
+
+
 def test_q_boundary_correction_mode_validation() -> None:
     fx = _build_rhs_fixture()
 
@@ -395,6 +481,36 @@ def test_q_boundary_correction_mode_validation() -> None:
             surface_cache=fx["surface_cache"],
             q_boundary_correction=q_boundary_correction_zero,
             q_boundary_correction_mode="invalid",
+        )
+
+
+def test_q_boundary_correction_requires_exact_boundary_source() -> None:
+    fx = _build_rhs_fixture()
+
+    with pytest.raises(ValueError, match="requires an exact boundary source"):
+        rhs_split_conservative_exchange(
+            q_elem=fx["q0"],
+            u_elem=fx["u_elem"],
+            v_elem=fx["v_elem"],
+            Dr=fx["Dr"],
+            Ds=fx["Ds"],
+            geom=fx["geom"],
+            rule=fx["rule"],
+            trace=fx["trace"],
+            conn=fx["conn"],
+            face_geom=fx["face_geom"],
+            q_boundary=q_boundary_sinx,
+            velocity=velocity_one_one,
+            t=0.125,
+            tau=0.0,
+            compute_mismatches=False,
+            return_diagnostics=False,
+            use_numba=False,
+            surface_backend="face-major",
+            surface_cache=fx["surface_cache"],
+            physical_boundary_mode="opposite_boundary",
+            q_boundary_correction=q_boundary_correction_zero,
+            q_boundary_correction_mode="all",
         )
 
 

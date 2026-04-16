@@ -28,6 +28,7 @@ from operators.rhs_split_conservative_exchange import (
     rhs_split_conservative_exchange,
     build_surface_exchange_cache,
     build_volume_split_cache,
+    resolve_effective_taus,
 )
 from operators.rhs_split_conservative_exact_trace import rhs_split_conservative_exact_trace
 
@@ -52,6 +53,8 @@ class LSRKHConvergenceConfig:
     tf_values: tuple[float, ...] = (np.pi*2, np.pi*20)
 
     tau: float = 0.0
+    tau_interior: float | None = None
+    tau_qb: float | None = None
     use_numba: bool | None = True
     surface_inverse_mass_mode: str = "diagonal"
     surface_backend: str = "face-major"
@@ -61,7 +64,7 @@ class LSRKHConvergenceConfig:
     use_surface_cache: bool = True
     use_rk_stage_boundary_correction: bool = False
     q_boundary_correction: Callable | None = None
-    q_boundary_correction_mode: str = "inflow"
+    q_boundary_correction_mode: str = "all"
     verbose: bool = True
 
 
@@ -431,6 +434,11 @@ def _validate_config(config: LSRKHConvergenceConfig) -> None:
         raise ValueError("tf_values must be non-empty.")
     if any(tf <= 0.0 for tf in config.tf_values):
         raise ValueError("All tf values must be positive.")
+    resolve_effective_taus(
+        tau=config.tau,
+        tau_interior=config.tau_interior,
+        tau_qb=config.tau_qb,
+    )
     surface_inverse_mass_mode = str(config.surface_inverse_mass_mode).strip().lower()
     if surface_inverse_mass_mode not in ("diagonal", "projected"):
         raise ValueError("surface_inverse_mass_mode must be one of: 'diagonal', 'projected'.")
@@ -445,9 +453,9 @@ def _validate_config(config: LSRKHConvergenceConfig) -> None:
     physical_boundary_mode = str(config.physical_boundary_mode).strip().lower()
     if physical_boundary_mode not in ("exact_qb", "opposite_boundary"):
         raise ValueError("physical_boundary_mode must be one of: 'exact_qb', 'opposite_boundary'.")
-    if interior_trace_mode == "exact_trace" and physical_boundary_mode != "exact_qb":
+    if interior_trace_mode == "exact_trace" and surface_inverse_mass_mode != "diagonal":
         raise ValueError(
-            "interior_trace_mode='exact_trace' currently supports only physical_boundary_mode='exact_qb'."
+            "surface_inverse_mass_mode='projected' is not supported with interior_trace_mode='exact_trace'."
         )
     q_boundary_correction_mode = str(config.q_boundary_correction_mode).strip().lower()
     if q_boundary_correction_mode not in ("inflow", "boundary", "all"):
@@ -458,6 +466,14 @@ def _validate_config(config: LSRKHConvergenceConfig) -> None:
         raise ValueError(
             "Use either use_rk_stage_boundary_correction=True or q_boundary_correction callable, not both."
         )
+    exact_source_exists = (interior_trace_mode == "exact_trace") or (physical_boundary_mode == "exact_qb")
+    if (config.use_rk_stage_boundary_correction or config.q_boundary_correction is not None) and (
+        not exact_source_exists
+    ):
+        raise ValueError(
+            "q_boundary_correction requires at least one exact source: "
+            "interior_trace_mode='exact_trace' or physical_boundary_mode='exact_qb'."
+        )
 
 
 def _prepare_study_context(config: LSRKHConvergenceConfig) -> dict:
@@ -465,6 +481,11 @@ def _prepare_study_context(config: LSRKHConvergenceConfig) -> dict:
     interior_trace_mode = str(config.interior_trace_mode).strip().lower()
     physical_boundary_mode = str(config.physical_boundary_mode).strip().lower()
     q_boundary_correction_mode = str(config.q_boundary_correction_mode).strip().lower()
+    tau_interior_eff, tau_qb_eff = resolve_effective_taus(
+        tau=config.tau,
+        tau_interior=config.tau_interior,
+        tau_qb=config.tau_qb,
+    )
 
     test_function_spec = _resolve_test_function_spec(config.test_function_mode)
     q_exact = _make_q_exact(test_function_spec)
@@ -484,6 +505,8 @@ def _prepare_study_context(config: LSRKHConvergenceConfig) -> dict:
         "interior_trace_mode": interior_trace_mode,
         "physical_boundary_mode": physical_boundary_mode,
         "q_boundary_correction_mode": q_boundary_correction_mode,
+        "tau_interior": float(tau_interior_eff),
+        "tau_qb": float(tau_qb_eff),
         "test_function_spec": test_function_spec,
         "q_exact": q_exact,
         "velocity": velocity,
@@ -511,9 +534,7 @@ def _prepare_level_state(
         diagonal=config.diagonal,
     )
 
-    conn = None
-    if interior_trace_mode == "exchange":
-        conn = build_face_connectivity(VX, VY, EToV, classify_boundary="box")
+    conn = build_face_connectivity(VX, VY, EToV, classify_boundary="box")
 
     X, Y = map_reference_nodes_to_all_elements(rule["rs"], VX, VY, EToV)
     q0 = context["q_exact"](X, Y, t=0.0)
@@ -531,7 +552,7 @@ def _prepare_level_state(
     )
 
     surface_cache = None
-    if config.use_surface_cache and interior_trace_mode == "exchange":
+    if config.use_surface_cache or interior_trace_mode == "exact_trace":
         surface_cache = build_surface_exchange_cache(
             rule=rule,
             trace=trace,
@@ -602,17 +623,16 @@ def _resolve_level_q_boundary_correction(
     elif q_boundary_correction is not None:
         q_boundary_correction_kind = "custom"
 
-    if interior_trace_mode == "exchange" and physical_boundary_mode == "opposite_boundary":
-        if q_boundary_correction_kind == "rk_stage":
-            q_boundary_correction_kind = "disabled_for_opposite_boundary"
-        elif q_boundary_correction_kind == "custom":
-            q_boundary_correction_kind = "disabled_custom_for_opposite_boundary"
-        q_boundary_correction = None
-    elif interior_trace_mode == "exact_trace":
+    if interior_trace_mode == "exact_trace":
         if q_boundary_correction_kind == "rk_stage":
             q_boundary_correction_kind = "rk_stage_exact_trace"
         elif q_boundary_correction_kind == "custom":
             q_boundary_correction_kind = "custom_exact_trace"
+    elif physical_boundary_mode == "exact_qb":
+        if q_boundary_correction_kind == "rk_stage":
+            q_boundary_correction_kind = "rk_stage_exact_qb"
+        elif q_boundary_correction_kind == "custom":
+            q_boundary_correction_kind = "custom_exact_qb"
 
     return q_boundary_correction, q_boundary_correction_kind
 
@@ -642,6 +662,8 @@ def _build_rhs_function(
                 velocity=context["velocity"],
                 t=t,
                 tau=config.tau,
+                tau_interior=context["tau_interior"],
+                tau_qb=context["tau_qb"],
                 compute_mismatches=False,
                 return_diagnostics=False,
                 use_numba=config.use_numba,
@@ -670,13 +692,19 @@ def _build_rhs_function(
             VY=level_state["VY"],
             EToV=level_state["EToV"],
             q_exact=context["q_exact"],
+            q_boundary=context["q_exact"],
             velocity=context["velocity"],
             t=t,
             tau=config.tau,
+            tau_interior=context["tau_interior"],
+            tau_qb=context["tau_qb"],
             face_geom=level_state["face_geom"],
+            physical_boundary_mode=context["physical_boundary_mode"],
             q_boundary_correction=q_boundary_correction,
             q_boundary_correction_mode=context["q_boundary_correction_mode"],
             use_numba=config.use_numba,
+            conn=level_state["conn"],
+            surface_cache=level_state["surface_cache"],
         )
         return total_rhs
 
@@ -753,6 +781,9 @@ def _run_lsrk_h_convergence_for_tf(
             "cfl": float(config.cfl),
             "dt_nominal": float(level_state["dt_nominal"]),
             "nsteps": int(nsteps),
+            "tau": float(config.tau),
+            "tau_interior": float(context["tau_interior"]),
+            "tau_qb": float(context["tau_qb"]),
             "L2_error": float(L2_error),
             "Linf_error": float(Linf_error),
             "L2_error_at_stop": float(L2_error_at_stop),
@@ -816,8 +847,8 @@ def run_lsrk_study(
 
     qb_mode:
     - "off": baseline run only
-    - "on": RK-stage qB correction run only
-    - "compare": run both baseline and RK-stage correction
+    - "on": RK-stage exact-source correction run only
+    - "compare": run both baseline and RK-stage exact-source correction
     """
     _validate_config(config)
     mode = _normalize_qb_mode(qb_mode)

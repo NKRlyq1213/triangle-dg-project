@@ -15,6 +15,7 @@ from experiments.lsrk_h_convergence import (
     build_projected_inverse_mass_from_rule,
     build_reference_diff_operators_from_rule,
     build_rk_stage_boundary_correction,
+    resolve_effective_taus,
     weighted_l2_error,
 )
 from experiments.output_paths import experiments_output_dir, project_root
@@ -76,7 +77,7 @@ def _parse_args() -> argparse.Namespace:
         "--interior-trace-mode",
         choices=("exchange", "exact_trace"),
         default="exchange",
-        help="interior-face mode: exchange uses connectivity, exact_trace uses exact exterior trace on all faces",
+        help="interior-face mode: exchange uses neighbor connectivity, exact_trace uses exact exterior trace on interior faces",
     )
     parser.add_argument(
         "--qb-correction",
@@ -100,7 +101,19 @@ def _parse_args() -> argparse.Namespace:
         "--tau",
         type=float,
         default=0.0,
-        help="surface numerical flux parameter; tau=0 is pure upwind and larger tau reduces the abs(ndotV)*(qM-qP) penalty",
+        help="shared surface numerical flux parameter; used for both tau-interior and tau-qb unless overridden",
+    )
+    parser.add_argument(
+        "--tau-interior",
+        type=float,
+        default=None,
+        help="surface numerical flux parameter for interior faces and non-exact_qb exterior traces",
+    )
+    parser.add_argument(
+        "--tau-qb",
+        type=float,
+        default=None,
+        help="surface numerical flux parameter for physical-boundary-mode=exact_qb faces only",
     )
     parser.add_argument(
         "--use-numba",
@@ -120,15 +133,27 @@ def _parse_args() -> argparse.Namespace:
 def _save_csv_multi(path: Path, curves: list[dict]) -> None:
     with path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        writer.writerow(["mesh_level", "time", "L2_error", "Linf_error", "max_abs_q"])
+        writer.writerow(
+            [
+                "mesh_level",
+                "tau_interior",
+                "tau_qb",
+                "time",
+                "L2_error",
+                "Linf_error",
+                "max_abs_q",
+            ]
+        )
         for curve in curves:
             mesh_level = int(curve["mesh_level"])
+            tau_interior = float(curve["tau_interior"])
+            tau_qb = float(curve["tau_qb"])
             times = np.asarray(curve["times"], dtype=float)
             l2 = np.asarray(curve["l2"], dtype=float)
             linf = np.asarray(curve["linf"], dtype=float)
             qmax = np.asarray(curve["qmax"], dtype=float)
             for i in range(times.size):
-                writer.writerow([mesh_level, times[i], l2[i], linf[i], qmax[i]])
+                writer.writerow([mesh_level, tau_interior, tau_qb, times[i], l2[i], linf[i], qmax[i]])
 
 
 def _resolve_mesh_levels(args: argparse.Namespace) -> list[int]:
@@ -163,15 +188,15 @@ def _run_single_mesh(
     surface_inverse_mass_t: np.ndarray | None,
     boundary_mode: str,
     interior_trace_mode: str,
+    tau_interior_eff: float,
+    tau_qb_eff: float,
 ) -> dict:
     VX, VY, EToV = structured_square_tri_mesh(
         nx=mesh_level,
         ny=mesh_level,
         diagonal="anti",
     )
-    conn = None
-    if interior_trace_mode == "exchange":
-        conn = build_face_connectivity(VX, VY, EToV, classify_boundary="box")
+    conn = build_face_connectivity(VX, VY, EToV, classify_boundary="box")
 
     X, Y = map_reference_nodes_to_all_elements(rule["rs"], VX, VY, EToV)
     q0 = q_exact(X, Y, t=0.0)
@@ -188,7 +213,12 @@ def _run_single_mesh(
         geom=geom,
     )
     surface_cache = None
-    if interior_trace_mode == "exchange":
+    if (
+        interior_trace_mode == "exchange"
+        or interior_trace_mode == "exact_trace"
+        or args.use_numba
+        or boundary_mode == "opposite_boundary"
+    ):
         surface_cache = build_surface_exchange_cache(
             rule=rule,
             trace=trace,
@@ -224,12 +254,10 @@ def _run_single_mesh(
         )
         q_boundary_correction_kind = "rk_stage"
 
-    if interior_trace_mode == "exchange" and boundary_mode == "opposite_boundary":
-        if args.qb_correction == "on":
-            q_boundary_correction_kind = "disabled_for_opposite_boundary"
-        q_boundary_correction = None
-    elif interior_trace_mode == "exact_trace" and q_boundary_correction_kind == "rk_stage":
+    if interior_trace_mode == "exact_trace" and q_boundary_correction_kind == "rk_stage":
         q_boundary_correction_kind = "rk_stage_exact_trace"
+    elif boundary_mode == "exact_qb" and q_boundary_correction_kind == "rk_stage":
+        q_boundary_correction_kind = "rk_stage_exact_qb"
 
     def rhs(t: float, q: np.ndarray) -> np.ndarray:
         q_boundary_correction_mode = str(args.q_boundary_correction_mode).strip().lower()
@@ -250,6 +278,8 @@ def _run_single_mesh(
                 velocity=velocity,
                 t=t,
                 tau=float(args.tau),
+                tau_interior=tau_interior_eff,
+                tau_qb=tau_qb_eff,
                 compute_mismatches=False,
                 return_diagnostics=False,
                 use_numba=args.use_numba,
@@ -278,13 +308,19 @@ def _run_single_mesh(
             VY=VY,
             EToV=EToV,
             q_exact=q_exact,
+            q_boundary=q_exact,
             velocity=velocity,
             t=t,
             tau=float(args.tau),
+            tau_interior=tau_interior_eff,
+            tau_qb=tau_qb_eff,
             face_geom=face_geom,
+            physical_boundary_mode=boundary_mode,
             q_boundary_correction=q_boundary_correction,
             q_boundary_correction_mode=q_boundary_correction_mode,
             use_numba=args.use_numba,
+            conn=conn,
+            surface_cache=surface_cache,
         )
         return total_rhs
 
@@ -336,6 +372,8 @@ def _run_single_mesh(
         "dt_nominal": dt_nominal,
         "reached_tf": reached_tf,
         "tf_used": float(t),
+        "tau_interior": float(tau_interior_eff),
+        "tau_qb": float(tau_qb_eff),
         "q_boundary_correction_kind": q_boundary_correction_kind,
     }
 
@@ -361,14 +399,21 @@ def main() -> None:
     boundary_mode = str(args.physical_boundary_mode).strip().lower()
     interior_trace_mode = str(args.interior_trace_mode).strip().lower()
     surface_inverse_mass_mode = str(args.surface_inverse_mass_mode).strip().lower()
+    tau_interior_eff, tau_qb_eff = resolve_effective_taus(
+        tau=float(args.tau),
+        tau_interior=args.tau_interior,
+        tau_qb=args.tau_qb,
+    )
 
-    if interior_trace_mode == "exact_trace" and boundary_mode != "exact_qb":
-        raise ValueError(
-            "interior-trace-mode='exact_trace' currently supports only physical-boundary-mode='exact_qb'."
-        )
     if interior_trace_mode == "exact_trace" and surface_inverse_mass_mode != "diagonal":
         raise ValueError(
             "surface-inverse-mass-mode='projected' is not supported with interior-trace-mode='exact_trace'."
+        )
+    exact_source_exists = (interior_trace_mode == "exact_trace") or (boundary_mode == "exact_qb")
+    if args.qb_correction == "on" and (not exact_source_exists):
+        raise ValueError(
+            "qb-correction requires at least one exact source: "
+            "interior-trace-mode='exact_trace' or physical-boundary-mode='exact_qb'."
         )
 
     surface_inverse_mass_t = None
@@ -392,6 +437,8 @@ def main() -> None:
             surface_inverse_mass_t=surface_inverse_mass_t,
             boundary_mode=boundary_mode,
             interior_trace_mode=interior_trace_mode,
+            tau_interior_eff=tau_interior_eff,
+            tau_qb_eff=tau_qb_eff,
         )
         curves.append(curve)
 
@@ -406,7 +453,8 @@ def main() -> None:
             f"_{args.test_function}"
             f"_{boundary_mode}"
             f"_{surface_inverse_mass_mode}"
-            f"_tau{_tau_label(args.tau)}"
+            f"_taui{_tau_label(tau_interior_eff)}"
+            f"_tauqb{_tau_label(tau_qb_eff)}"
             f"_qb{str(args.qb_correction).strip().lower()}"
         )
         if interior_trace_mode != "exchange":
@@ -437,7 +485,8 @@ def main() -> None:
     mesh_label = ",".join(str(n) for n in mesh_levels)
     ax.set_title(
         "LSRK L2 error vs time"
-        f" | tf={args.tf:g}, n={mesh_label}, tau={args.tau:g}, trace={interior_trace_mode}, reached_all={reached_all}"
+        f" | tf={args.tf:g}, n={mesh_label}, tau_i={tau_interior_eff:g}, tau_qb={tau_qb_eff:g},"
+        f" trace={interior_trace_mode}, reached_all={reached_all}"
     )
     ax.grid(True, which="both", linestyle=":", linewidth=0.8)
     ax.legend()
@@ -464,7 +513,9 @@ def main() -> None:
     )
     print(f"[run] surface_inverse_mass_mode={surface_inverse_mass_mode}")
     print(f"[run] tau={args.tau:g}")
-    print("[run] tau_role=surface numerical flux parameter; tau=0 is pure upwind and larger tau reduces the abs(ndotV)*(qM-qP) penalty")
+    print(f"[run] tau_interior={tau_interior_eff:g}")
+    print(f"[run] tau_qb={tau_qb_eff:g}")
+    print("[run] tau_role=penalty uses tau_interior on interior/non-exact_qb faces and tau_qb on physical-boundary-mode=exact_qb faces")
     qb_modes = ",".join(str(curve["q_boundary_correction_kind"]) for curve in curves)
     print(f"[run] qb_correction_kind={qb_modes}")
     print(f"[OK] wrote {fig_path}")

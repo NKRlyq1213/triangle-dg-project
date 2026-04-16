@@ -53,7 +53,7 @@ def test_compare_qb_correction_runs_for_small_case() -> None:
     corrected_row = compared["rk_stage_correction"][tf_key][0]
 
     assert baseline_row["q_boundary_correction_kind"] == "none"
-    assert corrected_row["q_boundary_correction_kind"] == "rk_stage"
+    assert corrected_row["q_boundary_correction_kind"] == "rk_stage_exact_qb"
 
 
 def test_config_rejects_mixed_qb_correction_sources() -> None:
@@ -70,3 +70,37 @@ def test_config_rejects_mixed_qb_correction_sources() -> None:
 
     with pytest.raises(ValueError, match="either"):
         run_lsrk_study(cfg, qb_mode="off")
+
+
+def test_config_rejects_qb_correction_without_exact_source() -> None:
+    cfg = LSRKHConvergenceConfig(
+        mesh_levels=(1,),
+        tf_values=(0.1,),
+        use_rk_stage_boundary_correction=True,
+        interior_trace_mode="exchange",
+        physical_boundary_mode="opposite_boundary",
+        use_numba=False,
+        verbose=False,
+    )
+
+    with pytest.raises(ValueError, match="requires at least one exact source"):
+        run_lsrk_study(cfg, qb_mode="off")
+
+
+def test_effective_tau_overrides_are_recorded_in_results() -> None:
+    cfg = LSRKHConvergenceConfig(
+        mesh_levels=(1,),
+        tf_values=(0.1,),
+        tau=0.1,
+        tau_qb=0.6,
+        use_numba=False,
+        verbose=False,
+    )
+
+    results = run_lsrk_study(cfg, qb_mode="off")
+    tf_key = next(iter(results["baseline"].keys()))
+    row = results["baseline"][tf_key][0]
+
+    assert row["tau"] == pytest.approx(0.1)
+    assert row["tau_interior"] == pytest.approx(0.1)
+    assert row["tau_qb"] == pytest.approx(0.6)
