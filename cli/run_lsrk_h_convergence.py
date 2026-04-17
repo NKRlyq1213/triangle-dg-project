@@ -41,6 +41,7 @@ def _output_stem(config: LSRKHConvergenceConfig, tf: float) -> str:
     return (
         f"lsrk_h_convergence_{_test_function_slug(config.test_function_mode)}_tf{_tf_label(tf)}_"
         f"table1_order{config.order}_N{config.N}_{config.diagonal}"
+        f"_face{str(config.face_order_mode).strip().lower()}"
         f"_{str(config.surface_inverse_mass_mode).strip().lower()}"
         f"_{str(config.physical_boundary_mode).strip().lower()}"
         f"_taui{_tau_label(tau_interior)}"
@@ -99,6 +100,12 @@ def _parse_args() -> argparse.Namespace:
         help="interior-face mode: exchange uses connectivity, exact_trace uses exact exterior trace on interior faces",
     )
     parser.add_argument(
+        "--face-order-mode",
+        choices=("triangle", "simplex", "simplex_strict"),
+        default="triangle",
+        help="surface face-index convention: triangle(default), simplex, or simplex_strict",
+    )
+    parser.add_argument(
         "--tau",
         type=float,
         default=0.0,
@@ -135,6 +142,12 @@ def _parse_args() -> argparse.Namespace:
         nargs="+",
         default=None,
         help="override the preset final times, for example: --tf-values 10",
+    )
+    parser.add_argument(
+        "--use-numba",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="enable/disable numba acceleration (default: enabled)",
     )
     return parser.parse_args()
 
@@ -178,6 +191,8 @@ def _build_config(
     test_function_mode: str,
     physical_boundary_mode: str,
     interior_trace_mode: str,
+    face_order_mode: str,
+    use_numba: bool,
 ) -> LSRKHConvergenceConfig:
     if preset == "upstream-pbc":
         return LSRKHConvergenceConfig(
@@ -187,14 +202,15 @@ def _build_config(
             diagonal="anti",
             mesh_levels=(1, 2, 4, 8, 16, 32, 64),
             cfl=1.0,
-            tf_values=(1.0,),
+            tf_values=(np.pi * 3,),
             tau=float(tau),
             tau_interior=None if tau_interior is None else float(tau_interior),
             tau_qb=None if tau_qb is None else float(tau_qb),
-            use_numba=True,
+            use_numba=bool(use_numba),
             surface_inverse_mass_mode=surface_inverse_mass_mode,
             surface_backend="face-major",
             interior_trace_mode=interior_trace_mode,
+            face_order_mode=face_order_mode,
             test_function_mode=test_function_mode,
             physical_boundary_mode=physical_boundary_mode,
             use_surface_cache=True,
@@ -209,18 +225,19 @@ def _build_config(
             diagonal="anti",
             mesh_levels=(1, 2, 4, 8, 16),
             cfl=1.0,
-            tf_values=(20.0,),
+            tf_values=(np.pi*3,),
             tau=float(tau),
             tau_interior=None if tau_interior is None else float(tau_interior),
             tau_qb=None if tau_qb is None else float(tau_qb),
-            use_numba=True,
+            use_numba=bool(use_numba),
             surface_inverse_mass_mode=surface_inverse_mass_mode,
             surface_backend="face-major",
             interior_trace_mode=interior_trace_mode,
+            face_order_mode=face_order_mode,
             test_function_mode=test_function_mode,
             physical_boundary_mode=physical_boundary_mode,
             use_surface_cache=True,
-            verbose=False,
+            verbose=True,
         )
 
     return LSRKHConvergenceConfig(
@@ -230,14 +247,15 @@ def _build_config(
         diagonal="anti",
         mesh_levels=(1, 2, 4, 8, 16, 32),
         cfl=1.0,
-        tf_values=(50.0,),
+        tf_values=(np.pi*3,),
         tau=float(tau),
         tau_interior=None if tau_interior is None else float(tau_interior),
         tau_qb=None if tau_qb is None else float(tau_qb),
-        use_numba=True,
+        use_numba=bool(use_numba),
         surface_inverse_mass_mode=surface_inverse_mass_mode,
         surface_backend="face-major",
         interior_trace_mode=interior_trace_mode,
+        face_order_mode=face_order_mode,
         test_function_mode=test_function_mode,
         physical_boundary_mode=physical_boundary_mode,
         use_surface_cache=True,
@@ -310,6 +328,8 @@ def main() -> None:
         test_function_mode=args.test_function,
         physical_boundary_mode=args.physical_boundary_mode,
         interior_trace_mode=args.interior_trace_mode,
+        face_order_mode=args.face_order_mode,
+        use_numba=bool(args.use_numba),
     )
     config, has_overrides = _apply_config_overrides(config, args)
     tau_interior_eff, tau_qb_eff = resolve_effective_taus(
@@ -325,9 +345,11 @@ def main() -> None:
     if has_overrides:
         print("[run] preset_overrides=on")
     print(f"[run] surface_inverse_mass_mode={config.surface_inverse_mass_mode}")
+    print(f"[run] use_numba={bool(config.use_numba)}")
     print(f"[run] test_function_mode={config.test_function_mode}")
     print(f"[run] physical_boundary_mode={config.physical_boundary_mode}")
     print(f"[run] interior_trace_mode={config.interior_trace_mode}")
+    print(f"[run] face_order_mode={config.face_order_mode}")
     print(f"[run] diagonal={config.diagonal}")
     print(f"[run] mesh_levels={config.mesh_levels}")
     print(f"[run] tf_values={config.tf_values}")

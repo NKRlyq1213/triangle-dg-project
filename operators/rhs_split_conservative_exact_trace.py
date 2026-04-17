@@ -157,6 +157,7 @@ def volume_term_split_conservative(
     Dr: np.ndarray,
     Ds: np.ndarray,
     geom: dict,
+    use_numba: bool | None = None,
 ) -> np.ndarray:
     """
     Volume term for the conservative split form:
@@ -182,6 +183,7 @@ def volume_term_split_conservative(
         yr=geom["yr"],
         ys=geom["ys"],
         J=geom["J"],
+        use_numba=use_numba,
     )
 
 
@@ -280,7 +282,7 @@ def surface_term_from_exact_trace(
         else surface_cache
     )
 
-    qM = evaluate_all_face_values(q_elem, trace)
+    qM = evaluate_all_face_values(q_elem, trace, use_numba=use_numba)
 
     x_face = np.asarray(cache["x_face"], dtype=float)
     y_face = np.asarray(cache["y_face"], dtype=float)
@@ -311,10 +313,18 @@ def surface_term_from_exact_trace(
             raise ValueError("q_boundary must return arrays with shape (K, 3, Nfp).")
         qP[is_boundary] = qB_boundary_exact[is_boundary]
     elif boundary_mode == "periodic_vmap":
-        qP_boundary = _build_boundary_state_from_periodic_vmap(q_elem=q_elem, cache=cache)
+        qP_boundary = _build_boundary_state_from_periodic_vmap(
+            q_elem=q_elem,
+            cache=cache,
+            use_numba=use_numba,
+        )
         qP[is_boundary] = qP_boundary[is_boundary]
     else:
-        qP_boundary = _build_boundary_state_from_opposite_boundary(q_elem=q_elem, cache=cache)
+        qP_boundary = _build_boundary_state_from_opposite_boundary(
+            q_elem=q_elem,
+            cache=cache,
+            use_numba=use_numba,
+        )
         qP[is_boundary] = qP_boundary[is_boundary]
 
     qB_exact = np.full_like(qM, np.nan)
@@ -434,6 +444,7 @@ def rhs_split_conservative_exact_trace(
         Dr=Dr,
         Ds=Ds,
         geom=geom,
+        use_numba=use_numba,
     )
 
     surface_rhs, surface_diag = surface_term_from_exact_trace(

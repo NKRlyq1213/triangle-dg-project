@@ -17,6 +17,7 @@ from operators.exchange import (
     pair_face_traces,
     interior_face_pair_mismatches,
 )
+from geometry.reference_triangle import reference_triangle_area
 
 
 def _should_use_numba(use_numba: bool | None) -> bool:
@@ -59,6 +60,69 @@ def _resolve_surface_backend(
         return "legacy"
 
     raise ValueError("surface_backend must be 'auto', 'legacy', or 'face-major'.")
+
+
+def _resolve_face_order_mode(face_order_mode: str | None) -> str:
+    mode = "triangle" if face_order_mode is None else str(face_order_mode).strip().lower()
+    if mode not in ("triangle", "simplex", "simplex_strict"):
+        raise ValueError("face_order_mode must be one of: 'triangle', 'simplex', 'simplex_strict'.")
+    return mode
+
+
+def _is_simplex_like_face_mode(face_order_mode: str) -> bool:
+    mode = _resolve_face_order_mode(face_order_mode)
+    return mode in ("simplex", "simplex_strict")
+
+
+def _canonical_face_axis_mode(face_order_mode: str) -> str:
+    return "simplex" if _is_simplex_like_face_mode(face_order_mode) else "triangle"
+
+
+def _resolve_surface_lift_scale(
+    *,
+    face_order_mode: str,
+    surface_inverse_mass_T: np.ndarray | None,
+) -> float:
+    mode = _resolve_face_order_mode(face_order_mode)
+    if mode != "simplex_strict":
+        return 1.0
+    if surface_inverse_mass_T is None:
+        raise ValueError(
+            "face_order_mode='simplex_strict' requires surface_inverse_mass_T (projected inverse-mass lifting)."
+        )
+    return float(reference_triangle_area())
+
+
+def _face_axis_permutations(face_order_mode: str) -> tuple[np.ndarray, np.ndarray]:
+    mode = _resolve_face_order_mode(face_order_mode)
+    if _is_simplex_like_face_mode(mode):
+        # Triangle trace order B=[v2v3,v3v1,v1v2] -> Simplex order A=[v1v2,v2v3,v3v1].
+        face_perm_new_to_old = np.asarray([2, 0, 1], dtype=np.int64)
+    else:
+        face_perm_new_to_old = np.asarray([0, 1, 2], dtype=np.int64)
+
+    face_perm_old_to_new = np.empty(3, dtype=np.int64)
+    face_perm_old_to_new[face_perm_new_to_old] = np.arange(3, dtype=np.int64)
+    return face_perm_new_to_old, face_perm_old_to_new
+
+
+def _build_flat_face_index_maps(
+    K: int,
+    face_perm_new_to_old: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    nf = 3 * int(K)
+    flat_new_to_old = np.empty(nf, dtype=np.int64)
+    flat_old_to_new = np.empty(nf, dtype=np.int64)
+
+    for k in range(int(K)):
+        base = 3 * k
+        for jf_new in range(3):
+            idx_new = base + jf_new
+            idx_old = base + int(face_perm_new_to_old[jf_new])
+            flat_new_to_old[idx_new] = idx_old
+            flat_old_to_new[idx_old] = idx_new
+
+    return flat_new_to_old, flat_old_to_new
 
 
 if _NUMBA_AVAILABLE:
@@ -219,10 +283,80 @@ if _NUMBA_AVAILABLE:
                         * (qMb - qPb)
                     )
 
+
+    @njit(cache=True)
+    def _boundary_state_from_opposite_kernel_inplace(
+        q_elem: np.ndarray,
+        boundary_face_idx: np.ndarray,
+        opposite_face_flat: np.ndarray,
+        opposite_flip_flat: np.ndarray,
+        owner_elem_flat: np.ndarray,
+        owner_node_ids_flat: np.ndarray,
+        qB_flat: np.ndarray,
+    ) -> None:
+        nfp = owner_node_ids_flat.shape[1]
+        for b in range(boundary_face_idx.size):
+            idx = boundary_face_idx[b]
+            opp_idx = opposite_face_flat[idx]
+            opp_elem = owner_elem_flat[opp_idx]
+            flip = opposite_flip_flat[idx]
+
+            if flip:
+                for i in range(nfp):
+                    src_i = nfp - 1 - i
+                    qB_flat[idx, i] = q_elem[opp_elem, owner_node_ids_flat[opp_idx, src_i]]
+            else:
+                for i in range(nfp):
+                    qB_flat[idx, i] = q_elem[opp_elem, owner_node_ids_flat[opp_idx, i]]
+
+
+    @njit(cache=True)
+    def _boundary_state_from_periodic_vmap_kernel_inplace(
+        q_elem: np.ndarray,
+        boundary_face_idx: np.ndarray,
+        partner_elem_flat: np.ndarray,
+        partner_node_ids_flat: np.ndarray,
+        qB_flat: np.ndarray,
+    ) -> None:
+        nfp = partner_node_ids_flat.shape[1]
+        for b in range(boundary_face_idx.size):
+            idx = boundary_face_idx[b]
+            for i in range(nfp):
+                qB_flat[idx, i] = q_elem[
+                    partner_elem_flat[idx, i],
+                    partner_node_ids_flat[idx, i],
+                ]
+
+
+    @njit(cache=True)
+    def _accumulate_projected_surface_integral_kernel_inplace(
+        p: np.ndarray,
+        owner_elem_flat: np.ndarray,
+        owner_node_ids_flat: np.ndarray,
+        face_weight_flat: np.ndarray,
+        length_flat: np.ndarray,
+        surface_integral: np.ndarray,
+    ) -> None:
+        nf = owner_elem_flat.size
+        nfp = owner_node_ids_flat.shape[1]
+
+        for face_idx in range(nf):
+            k = owner_elem_flat[face_idx]
+            jf = face_idx - 3 * k
+            face_length = length_flat[face_idx]
+            for i in range(nfp):
+                node_id = owner_node_ids_flat[face_idx, i]
+                surface_integral[k, node_id] += (
+                    face_length * face_weight_flat[face_idx, i] * p[k, jf, i]
+                )
+
 else:
     _surface_rhs_kernel_inplace = None
     _face_major_surface_rhs_flat_kernel_inplace = None
     _face_major_surface_rhs_pair_kernel_inplace = None
+    _boundary_state_from_opposite_kernel_inplace = None
+    _boundary_state_from_periodic_vmap_kernel_inplace = None
+    _accumulate_projected_surface_integral_kernel_inplace = None
 
 
 def volume_term_split_conservative(
@@ -559,10 +693,6 @@ def _apply_exact_source_q_correction(
     return qP
 
 
-def _coord_key(x_val: float, y_val: float, tol: float) -> tuple[int, int]:
-    return (int(np.round(float(x_val) / tol)), int(np.round(float(y_val) / tol)))
-
-
 def _pair_boundary_faces_by_axis(
     faces_a: list[tuple[int, int]],
     faces_b: list[tuple[int, int]],
@@ -723,6 +853,7 @@ def _build_opposite_boundary_face_map(
 def _build_boundary_state_from_opposite_boundary(
     q_elem: np.ndarray,
     cache: dict,
+    use_numba: bool | None = None,
 ) -> np.ndarray:
     q_elem = np.asarray(q_elem, dtype=float)
     K = int(cache["K"])
@@ -742,18 +873,38 @@ def _build_boundary_state_from_opposite_boundary(
     opposite_face_flat = np.asarray(opposite_face_flat, dtype=np.int64)
     opposite_flip_flat = np.asarray(opposite_flip_flat, dtype=np.bool_)
 
-    qB_flat = np.zeros((nf, nfp), dtype=float)
     boundary_idx = np.nonzero(boundary_flat)[0]
-    for idx in boundary_idx:
-        opp_idx = int(opposite_face_flat[idx])
-        if opp_idx < 0:
-            raise ValueError("Encountered unpaired boundary face in opposite_boundary mode.")
-        vals = q_elem[owner_elem[opp_idx], owner_node_ids[opp_idx, :]]
-        if bool(opposite_flip_flat[idx]):
-            vals = vals[::-1]
-        qB_flat[idx, :] = vals
+    if np.any(opposite_face_flat[boundary_idx] < 0):
+        raise ValueError("Encountered unpaired boundary face in opposite_boundary mode.")
+
+    qB_flat = np.zeros((nf, nfp), dtype=float)
+    if _should_use_numba(use_numba):
+        q_elem_numba = q_elem
+        if q_elem_numba.dtype != np.float64 or (not q_elem_numba.flags.c_contiguous):
+            q_elem_numba = np.ascontiguousarray(q_elem_numba, dtype=np.float64)
+
+        _boundary_state_from_opposite_kernel_inplace(
+            q_elem=q_elem_numba,
+            boundary_face_idx=np.ascontiguousarray(boundary_idx, dtype=np.int64),
+            opposite_face_flat=opposite_face_flat,
+            opposite_flip_flat=opposite_flip_flat,
+            owner_elem_flat=owner_elem,
+            owner_node_ids_flat=owner_node_ids,
+            qB_flat=qB_flat,
+        )
+    else:
+        for idx in boundary_idx:
+            opp_idx = int(opposite_face_flat[idx])
+            vals = q_elem[owner_elem[opp_idx], owner_node_ids[opp_idx, :]]
+            if bool(opposite_flip_flat[idx]):
+                vals = vals[::-1]
+            qB_flat[idx, :] = vals
 
     return qB_flat.reshape(K, 3, nfp)
+
+
+def _coord_key(x_val: float, y_val: float, tol: float) -> tuple[int, int]:
+    return (int(np.round(float(x_val) / tol)), int(np.round(float(y_val) / tol)))
 
 
 def _build_periodic_boundary_node_map(
@@ -847,6 +998,7 @@ def _build_periodic_boundary_node_map(
 def _build_boundary_state_from_periodic_vmap(
     q_elem: np.ndarray,
     cache: dict,
+    use_numba: bool | None = None,
 ) -> np.ndarray:
     q_elem = np.asarray(q_elem, dtype=float)
     K = int(cache["K"])
@@ -868,9 +1020,25 @@ def _build_boundary_state_from_periodic_vmap(
         raise ValueError("periodic_vmap node map must have shape (3*K, Nfp).")
 
     qB_flat = np.zeros((nf, nfp), dtype=float)
-    boundary_idx = np.nonzero(boundary_flat)[0]
-    for idx in boundary_idx:
-        qB_flat[idx, :] = q_elem[partner_elem_flat[idx, :], partner_node_ids_flat[idx, :]]
+    boundary_idx = np.asarray(
+        cache.get("boundary_face_idx_numba", np.nonzero(boundary_flat)[0].astype(np.int64)),
+        dtype=np.int64,
+    )
+    if _should_use_numba(use_numba):
+        q_elem_numba = q_elem
+        if q_elem_numba.dtype != np.float64 or (not q_elem_numba.flags.c_contiguous):
+            q_elem_numba = np.ascontiguousarray(q_elem_numba, dtype=np.float64)
+
+        _boundary_state_from_periodic_vmap_kernel_inplace(
+            q_elem=q_elem_numba,
+            boundary_face_idx=np.ascontiguousarray(boundary_idx, dtype=np.int64),
+            partner_elem_flat=partner_elem_flat,
+            partner_node_ids_flat=partner_node_ids_flat,
+            qB_flat=qB_flat,
+        )
+    else:
+        for idx in boundary_idx:
+            qB_flat[idx, :] = q_elem[partner_elem_flat[idx, :], partner_node_ids_flat[idx, :]]
 
     return qB_flat.reshape(K, 3, nfp)
 
@@ -880,6 +1048,7 @@ def build_surface_exchange_cache(
     trace: dict,
     conn: dict,
     face_geom: dict,
+    face_order_mode: str = "triangle",
     X_nodes: np.ndarray | None = None,
     Y_nodes: np.ndarray | None = None,
 ) -> dict:
@@ -892,13 +1061,16 @@ def build_surface_exchange_cache(
     if trace.get("trace_mode", None) != "embedded":
         raise ValueError("Surface cache currently supports embedded traces only.")
 
+    face_mode = _resolve_face_order_mode(face_order_mode)
+    face_perm_new_to_old, face_perm_old_to_new = _face_axis_permutations(face_mode)
+
     ws = np.asarray(rule["ws"], dtype=float).reshape(-1)
     inv_ws = 1.0 / ws
 
-    ids_faces = []
-    we_faces = []
-    wr_faces = []
-    ids_unique = []
+    ids_faces_raw = []
+    we_faces_raw = []
+    wr_faces_raw = []
+    ids_unique_raw = []
     nfp = int(trace["nfp"])
 
     for face_id in (1, 2, 3):
@@ -910,31 +1082,51 @@ def build_surface_exchange_cache(
         if we.size != nfp:
             raise ValueError("Trace face-weight count must match trace['nfp'].")
 
-        ids_faces.append(ids)
-        we_faces.append(we)
-        wr_faces.append(we * inv_ws[ids])
-        ids_unique.append(np.unique(ids).size == ids.size)
+        ids_faces_raw.append(ids)
+        we_faces_raw.append(we)
+        wr_faces_raw.append(we * inv_ws[ids])
+        ids_unique_raw.append(np.unique(ids).size == ids.size)
+
+    ids_faces = [ids_faces_raw[int(jf_old)] for jf_old in face_perm_new_to_old]
+    we_faces = [we_faces_raw[int(jf_old)] for jf_old in face_perm_new_to_old]
+    wr_faces = [wr_faces_raw[int(jf_old)] for jf_old in face_perm_new_to_old]
+    ids_unique = [ids_unique_raw[int(jf_old)] for jf_old in face_perm_new_to_old]
 
     area = np.asarray(face_geom["area"], dtype=float).reshape(-1)
-    length = np.asarray(face_geom["length"], dtype=float)
+    length_raw = np.asarray(face_geom["length"], dtype=float)
+    length = np.ascontiguousarray(length_raw[:, face_perm_new_to_old], dtype=float)
     if length.shape != (area.size, 3):
         raise ValueError("face_geom['length'] must have shape (K, 3).")
 
-    EToE = np.asarray(conn["EToE"], dtype=int)
-    EToF = np.asarray(conn["EToF"], dtype=int)
-    is_boundary = np.asarray(conn["is_boundary"], dtype=bool)
-    face_flip = np.asarray(conn["face_flip"], dtype=bool)
+    EToE_raw = np.asarray(conn["EToE"], dtype=int)
+    EToF_raw = np.asarray(conn["EToF"], dtype=int)
+    is_boundary_raw = np.asarray(conn["is_boundary"], dtype=bool)
+    face_flip_raw = np.asarray(conn["face_flip"], dtype=bool)
 
-    K = int(EToE.shape[0])
-    if EToE.shape != (K, 3):
+    K = int(EToE_raw.shape[0])
+    if EToE_raw.shape != (K, 3):
         raise ValueError("conn['EToE'] must have shape (K, 3).")
-    if EToF.shape != (K, 3) or is_boundary.shape != (K, 3) or face_flip.shape != (K, 3):
+    if (
+        EToF_raw.shape != (K, 3)
+        or is_boundary_raw.shape != (K, 3)
+        or face_flip_raw.shape != (K, 3)
+    ):
         raise ValueError("conn face arrays must have shape (K, 3).")
 
-    x_face = np.asarray(face_geom["x_face"], dtype=float)
-    y_face = np.asarray(face_geom["y_face"], dtype=float)
-    nx = np.asarray(face_geom["nx"], dtype=float)
-    ny = np.asarray(face_geom["ny"], dtype=float)
+    EToE = np.ascontiguousarray(EToE_raw[:, face_perm_new_to_old], dtype=int)
+    EToF_old = np.asarray(EToF_raw[:, face_perm_new_to_old], dtype=int)
+    EToF = np.ascontiguousarray(face_perm_old_to_new[EToF_old - 1] + 1, dtype=int)
+    is_boundary = np.ascontiguousarray(is_boundary_raw[:, face_perm_new_to_old], dtype=bool)
+    face_flip = np.ascontiguousarray(face_flip_raw[:, face_perm_new_to_old], dtype=bool)
+
+    x_face_raw = np.asarray(face_geom["x_face"], dtype=float)
+    y_face_raw = np.asarray(face_geom["y_face"], dtype=float)
+    nx_raw = np.asarray(face_geom["nx"], dtype=float)
+    ny_raw = np.asarray(face_geom["ny"], dtype=float)
+    x_face = np.ascontiguousarray(x_face_raw[:, face_perm_new_to_old, :], dtype=float)
+    y_face = np.ascontiguousarray(y_face_raw[:, face_perm_new_to_old, :], dtype=float)
+    nx = np.ascontiguousarray(nx_raw[:, face_perm_new_to_old, :], dtype=float)
+    ny = np.ascontiguousarray(ny_raw[:, face_perm_new_to_old, :], dtype=float)
     expected_face_shape = (K, 3, nfp)
     if (
         x_face.shape != expected_face_shape
@@ -959,14 +1151,26 @@ def build_surface_exchange_cache(
     owner_elem_flat_numba = np.repeat(np.arange(K, dtype=np.int64), 3)
     owner_node_ids_flat_numba = np.empty((nf, nfp), dtype=np.int64)
     owner_wratio_flat_numba = np.empty((nf, nfp), dtype=np.float64)
+    face_weight_flat_numba = np.empty((nf, nfp), dtype=np.float64)
+    length_flat_numba = np.ascontiguousarray(length.reshape(-1), dtype=np.float64)
 
     ids_faces_numba = tuple(np.ascontiguousarray(ids, dtype=np.int64) for ids in ids_faces)
     wr_faces_numba = tuple(np.ascontiguousarray(wr, dtype=np.float64) for wr in wr_faces)
+    we_faces_numba = tuple(np.ascontiguousarray(we, dtype=np.float64) for we in we_faces)
+    we_faces_matrix = np.ascontiguousarray(np.stack(we_faces, axis=0), dtype=float)
+
+    E_face_matrix = np.zeros((3 * nfp, int(ws.size)), dtype=float)
+    for jf in range(3):
+        row0 = jf * nfp
+        for i_local, node_id in enumerate(ids_faces[jf]):
+            E_face_matrix[row0 + i_local, int(node_id)] = 1.0
+    E_face_matrix = np.ascontiguousarray(E_face_matrix, dtype=float)
 
     for jf in range(3):
         rows = np.arange(jf, nf, 3, dtype=np.int64)
         owner_node_ids_flat_numba[rows, :] = ids_faces_numba[jf][None, :]
         owner_wratio_flat_numba[rows, :] = wr_faces_numba[jf][None, :]
+        face_weight_flat_numba[rows, :] = we_faces_numba[jf][None, :]
 
     nbr_elem_flat_numba = np.empty(nf, dtype=np.int64)
     nbr_node_ids_flat_numba = np.empty((nf, nfp), dtype=np.int64)
@@ -1006,10 +1210,24 @@ def build_surface_exchange_cache(
         dtype=np.int64,
     )
 
-    opposite_face_flat, opposite_flip_flat = _build_opposite_boundary_face_map(
+    opposite_face_flat_old, opposite_flip_flat_old = _build_opposite_boundary_face_map(
         conn=conn,
         face_geom=face_geom,
     )
+
+    flat_new_to_old, flat_old_to_new = _build_flat_face_index_maps(
+        K=K,
+        face_perm_new_to_old=face_perm_new_to_old,
+    )
+    opposite_face_flat = -np.ones(nf, dtype=np.int64)
+    opposite_flip_flat = np.zeros(nf, dtype=np.bool_)
+    for idx_new in range(nf):
+        idx_old = int(flat_new_to_old[idx_new])
+        opp_old = int(opposite_face_flat_old[idx_old])
+        if opp_old >= 0:
+            opposite_face_flat[idx_new] = int(flat_old_to_new[opp_old])
+        opposite_flip_flat[idx_new] = bool(opposite_flip_flat_old[idx_old])
+
     opposite_face_flat_numba = np.ascontiguousarray(opposite_face_flat, dtype=np.int64)
     opposite_flip_flat_numba = np.ascontiguousarray(opposite_flip_flat, dtype=np.bool_)
 
@@ -1031,6 +1249,11 @@ def build_surface_exchange_cache(
         periodic_vmap_node_ids_flat_numba = np.ascontiguousarray(periodic_vmap_node_ids_flat, dtype=np.int64)
 
     return {
+        "face_order_mode": face_mode,
+        "face_perm_new_to_old": np.ascontiguousarray(face_perm_new_to_old, dtype=np.int64),
+        "face_perm_old_to_new": np.ascontiguousarray(face_perm_old_to_new, dtype=np.int64),
+        "flat_face_new_to_old": np.ascontiguousarray(flat_new_to_old, dtype=np.int64),
+        "flat_face_old_to_new": np.ascontiguousarray(flat_old_to_new, dtype=np.int64),
         "K": K,
         "Np": int(ws.size),
         "nfp": nfp,
@@ -1049,10 +1272,14 @@ def build_surface_exchange_cache(
         "we_faces": tuple(we_faces),
         "wr_faces": tuple(wr_faces),
         "ids_unique": tuple(ids_unique),
+        "we_faces_matrix": we_faces_matrix,
+        "E_face_matrix": E_face_matrix,
         "ids_faces_numba": ids_faces_numba,
         "wr_faces_numba": wr_faces_numba,
+        "we_faces_numba": we_faces_numba,
         "area_numba": area_numba,
         "length_numba": length_numba,
+        "length_flat_numba": length_flat_numba,
         "length_over_area_flat_numba": length_over_area_flat_numba,
         "neighbor_face_flat": nbr_face_linear.reshape(-1),
         "neighbor_face_flat_numba": neighbor_face_flat_numba,
@@ -1064,6 +1291,7 @@ def build_surface_exchange_cache(
         "owner_elem_flat_numba": np.ascontiguousarray(owner_elem_flat_numba, dtype=np.int64),
         "owner_node_ids_flat_numba": np.ascontiguousarray(owner_node_ids_flat_numba, dtype=np.int64),
         "owner_wratio_flat_numba": np.ascontiguousarray(owner_wratio_flat_numba, dtype=np.float64),
+        "face_weight_flat_numba": np.ascontiguousarray(face_weight_flat_numba, dtype=np.float64),
         "nbr_elem_flat_numba": np.ascontiguousarray(nbr_elem_flat_numba, dtype=np.int64),
         "nbr_node_ids_flat_numba": np.ascontiguousarray(nbr_node_ids_flat_numba, dtype=np.int64),
         "boundary_face_idx_numba": boundary_face_idx_numba,
@@ -1085,9 +1313,13 @@ def _lift_surface_penalty_to_volume(
     cache: dict,
     use_numba: bool | None,
     surface_inverse_mass_T: np.ndarray | None = None,
+    lift_scale: float = 1.0,
 ) -> np.ndarray:
     K = int(cache["K"])
     Np = int(cache["Np"])
+    lift_scale = float(lift_scale)
+    if (not np.isfinite(lift_scale)) or lift_scale <= 0.0:
+        raise ValueError("lift_scale must be a finite positive scalar.")
 
     if surface_inverse_mass_T is not None:
         surface_inverse_mass_t = np.asarray(surface_inverse_mass_T, dtype=float)
@@ -1097,6 +1329,62 @@ def _lift_surface_penalty_to_volume(
             or surface_inverse_mass_t.shape[1] != Np
         ):
             raise ValueError("surface_inverse_mass_T must be a square (Np, Np) array.")
+
+        if _should_use_numba(use_numba):
+            owner_elem_flat = np.asarray(cache["owner_elem_flat_numba"], dtype=np.int64)
+            owner_node_ids_flat = np.asarray(cache["owner_node_ids_flat_numba"], dtype=np.int64)
+            face_weight_flat = np.asarray(cache["face_weight_flat_numba"], dtype=np.float64)
+            length_flat = np.asarray(cache["length_flat_numba"], dtype=np.float64)
+            area_numba = np.asarray(cache.get("area_numba", cache["area"]), dtype=np.float64)
+
+            nf = int(owner_elem_flat.size)
+            if owner_node_ids_flat.shape != (nf, p.shape[2]):
+                raise ValueError("owner_node_ids_flat_numba shape mismatch in surface cache.")
+            if face_weight_flat.shape != (nf, p.shape[2]):
+                raise ValueError("face_weight_flat_numba shape mismatch in surface cache.")
+            if length_flat.shape != (nf,):
+                raise ValueError("length_flat_numba shape mismatch in surface cache.")
+            if area_numba.shape != (K,):
+                raise ValueError("area_numba shape mismatch in surface cache.")
+
+            p_numba = p
+            if p_numba.dtype != np.float64 or (not p_numba.flags.c_contiguous):
+                p_numba = np.ascontiguousarray(p_numba, dtype=np.float64)
+
+            surface_integral = np.zeros((K, Np), dtype=float)
+            _accumulate_projected_surface_integral_kernel_inplace(
+                p=p_numba,
+                owner_elem_flat=owner_elem_flat,
+                owner_node_ids_flat=owner_node_ids_flat,
+                face_weight_flat=face_weight_flat,
+                length_flat=length_flat,
+                surface_integral=surface_integral,
+            )
+
+            surface_rhs = surface_integral @ surface_inverse_mass_t
+            surface_rhs /= area_numba[:, None]
+            if lift_scale != 1.0:
+                surface_rhs *= lift_scale
+            return surface_rhs
+
+        if lift_scale != 1.0:
+            length = np.asarray(cache["length"], dtype=float)
+            area = np.asarray(cache["area"], dtype=float)
+            we_faces_matrix = np.asarray(cache["we_faces_matrix"], dtype=float)
+            E_face_matrix = np.asarray(cache["E_face_matrix"], dtype=float)
+            if we_faces_matrix.shape != (3, p.shape[2]):
+                raise ValueError("we_faces_matrix shape mismatch in surface cache.")
+            if E_face_matrix.shape != (3 * p.shape[2], Np):
+                raise ValueError("E_face_matrix shape mismatch in surface cache.")
+
+            scaled_penalty = (
+                p * we_faces_matrix[None, :, :] * length[:, :, None]
+            ).transpose(1, 2, 0).reshape(3 * p.shape[2], K)
+            surface_integral = E_face_matrix.T @ scaled_penalty
+            surface_rhs = surface_integral.T @ surface_inverse_mass_t
+            surface_rhs /= area[:, None]
+            surface_rhs *= lift_scale
+            return surface_rhs
 
         ids_faces = cache["ids_faces"]
         we_faces = cache["we_faces"]
@@ -1119,6 +1407,8 @@ def _lift_surface_penalty_to_volume(
 
         surface_rhs = surface_integral @ surface_inverse_mass_t
         surface_rhs /= area[:, None]
+        if lift_scale != 1.0:
+            surface_rhs *= lift_scale
         return surface_rhs
 
     surface_rhs = np.zeros((K, Np), dtype=float)
@@ -1171,6 +1461,9 @@ def _lift_surface_penalty_to_volume(
             col_idx = np.broadcast_to(ids[None, :], face_contrib.shape)
             np.add.at(surface_rhs, (row_idx, col_idx), face_contrib)
 
+    if lift_scale != 1.0:
+        surface_rhs *= lift_scale
+
     return surface_rhs
 
 def surface_term_from_exchange(
@@ -1194,6 +1487,7 @@ def surface_term_from_exchange(
     ndotV_flat_precomputed: np.ndarray | None = None,
     surface_inverse_mass_T: np.ndarray | None = None,
     physical_boundary_mode: str = "exact_qb",
+    face_order_mode: str = "triangle",
     q_boundary_correction=None,
     q_boundary_correction_mode: str = "inflow",
     volume_split_cache: dict | None = None,
@@ -1215,28 +1509,41 @@ def surface_term_from_exchange(
     if trace.get("trace_mode", None) != "embedded":
         raise ValueError("This phase currently supports Table 1 embedded trace only.")
 
+    requested_face_mode = _resolve_face_order_mode(face_order_mode)
+    requested_axis_mode = _canonical_face_axis_mode(requested_face_mode)
     boundary_mode = str(physical_boundary_mode).strip().lower()
     if boundary_mode not in ("exact_qb", "opposite_boundary", "periodic_vmap"):
         raise ValueError(
             "physical_boundary_mode must be one of: 'exact_qb', 'opposite_boundary', 'periodic_vmap'."
         )
 
-    if surface_cache is None:
-        if boundary_mode == "periodic_vmap" and (X_nodes is None or Y_nodes is None):
-            raise ValueError(
-                "physical_boundary_mode='periodic_vmap' requires nodal coordinates X_nodes and Y_nodes "
-                "when surface_cache is not provided."
-            )
-        cache = build_surface_exchange_cache(
+    cache = (
+        build_surface_exchange_cache(
             rule,
             trace,
             conn,
             face_geom,
+            face_order_mode=requested_face_mode,
             X_nodes=X_nodes if boundary_mode == "periodic_vmap" else None,
             Y_nodes=Y_nodes if boundary_mode == "periodic_vmap" else None,
         )
-    else:
-        cache = surface_cache
+        if surface_cache is None
+        else surface_cache
+    )
+    cache_face_mode = _resolve_face_order_mode(cache.get("face_order_mode", "triangle"))
+    cache_axis_mode = _canonical_face_axis_mode(cache_face_mode)
+    if cache_axis_mode != requested_axis_mode:
+        raise ValueError(
+            "surface_cache face-order mode does not match requested face_order_mode."
+        )
+    surface_lift_scale = _resolve_surface_lift_scale(
+        face_order_mode=requested_face_mode,
+        surface_inverse_mass_T=surface_inverse_mass_T,
+    )
+    face_perm_new_to_old = np.asarray(
+        cache.get("face_perm_new_to_old", np.asarray([0, 1, 2], dtype=np.int64)),
+        dtype=np.int64,
+    )
 
     K, Np = q_elem.shape
     if int(cache["K"]) != K or int(cache["Np"]) != Np:
@@ -1266,11 +1573,18 @@ def surface_term_from_exchange(
         ndotV = np.asarray(ndotV_precomputed, dtype=float)
         if ndotV.shape != (K, 3, nfp):
             raise ValueError("ndotV_precomputed must have shape (K, 3, Nfp).")
+        if _is_simplex_like_face_mode(cache_face_mode):
+            ndotV = np.ascontiguousarray(ndotV[:, face_perm_new_to_old, :], dtype=float)
         if return_diagnostics:
             u_face, v_face = velocity(x_face, y_face, t)
             u_face = np.asarray(u_face, dtype=float)
             v_face = np.asarray(v_face, dtype=float)
 
+    if boundary_mode == "periodic_vmap" and cache.get("periodic_vmap_elem_flat_numba", None) is None:
+        raise ValueError(
+            "physical_boundary_mode='periodic_vmap' requires a periodic node map in surface_cache; "
+            "provide X_nodes and Y_nodes when building the cache."
+        )
     if q_boundary_correction is not None and boundary_mode != "exact_qb":
         raise ValueError(
             "q_boundary_correction requires an exact boundary source; "
@@ -1284,9 +1598,17 @@ def surface_term_from_exchange(
         qB_exact = np.asarray(q_boundary(x_face, y_face, t), dtype=float)
         qP_boundary = np.array(qB_exact, dtype=float, copy=True)
     elif boundary_mode == "periodic_vmap":
-        qP_boundary = _build_boundary_state_from_periodic_vmap(q_elem=q_elem, cache=cache)
+        qP_boundary = _build_boundary_state_from_periodic_vmap(
+            q_elem=q_elem,
+            cache=cache,
+            use_numba=use_numba,
+        )
     else:
-        qP_boundary = _build_boundary_state_from_opposite_boundary(q_elem=q_elem, cache=cache)
+        qP_boundary = _build_boundary_state_from_opposite_boundary(
+            q_elem=q_elem,
+            cache=cache,
+            use_numba=use_numba,
+        )
 
     if ndotV.shape != (K, 3, nfp) or qP_boundary.shape != (K, 3, nfp):
         raise ValueError("velocity/boundary callbacks must return arrays with shape (K, 3, Nfp).")
@@ -1326,7 +1648,7 @@ def surface_term_from_exchange(
         if _should_use_numba(use_numba) and (not return_diagnostics) and (surface_inverse_mass_T is None):
             surface_rhs = np.zeros((K, Np), dtype=float)
 
-            if ndotV_flat_precomputed is None:
+            if ndotV_flat_precomputed is None or _is_simplex_like_face_mode(cache_face_mode):
                 ndotV_flat = ndotV.reshape(K * 3, nfp)
                 if ndotV_flat.dtype != np.float64 or (not ndotV_flat.flags.c_contiguous):
                     ndotV_flat = np.ascontiguousarray(ndotV_flat, dtype=np.float64)
@@ -1433,6 +1755,7 @@ def surface_term_from_exchange(
             cache,
             use_numba=use_numba,
             surface_inverse_mass_T=surface_inverse_mass_T,
+            lift_scale=surface_lift_scale,
         )
 
         if not return_diagnostics:
@@ -1476,6 +1799,8 @@ def surface_term_from_exchange(
             "ny": ny,
             "interior_mismatches": mismatches,
             "surface_backend": "face-major",
+            "face_order_mode": requested_face_mode,
+            "surface_lift_scale": float(surface_lift_scale),
         }
         return surface_rhs, diagnostics
 
@@ -1489,6 +1814,10 @@ def surface_term_from_exchange(
 
     qM = np.asarray(paired["uM"], dtype=float)
     qP = np.asarray(paired["uP"], dtype=float)
+
+    if _is_simplex_like_face_mode(cache_face_mode):
+        qM = np.ascontiguousarray(qM[:, face_perm_new_to_old, :], dtype=float)
+        qP = np.ascontiguousarray(qP[:, face_perm_new_to_old, :], dtype=float)
 
     is_boundary = np.asarray(cache["is_boundary"], dtype=bool)
     qP_filled = fill_exterior_state(
@@ -1508,17 +1837,29 @@ def surface_term_from_exchange(
         cache,
         use_numba=use_numba,
         surface_inverse_mass_T=surface_inverse_mass_T,
+        lift_scale=surface_lift_scale,
     )
 
     if not return_diagnostics:
         return surface_rhs, {}
 
-    mismatches = interior_face_pair_mismatches(paired) if compute_mismatches else []
+    if compute_mismatches:
+        mismatches = interior_face_pair_mismatches(
+            {
+                "uM": qM,
+                "uP": qP,
+                "EToE": cache["EToE"],
+                "EToF": cache["EToF"],
+                "is_boundary": cache["is_boundary"],
+            }
+        )
+    else:
+        mismatches = []
 
     diagnostics = {
         "qM": qM,
-        "qP_interior": np.asarray(paired["uP"], dtype=float),
-        "qP_before_boundary_fill": np.asarray(paired["uP"], dtype=float),
+        "qP_interior": qP,
+        "qP_before_boundary_fill": qP,
         "qP_boundary": qP_boundary,
         "qP": qP_filled,
         "qB_exact": qB_exact,
@@ -1537,6 +1878,8 @@ def surface_term_from_exchange(
         "ny": ny,
         "interior_mismatches": mismatches,
         "surface_backend": "legacy",
+        "face_order_mode": requested_face_mode,
+        "surface_lift_scale": float(surface_lift_scale),
     }
     return surface_rhs, diagnostics
 
@@ -1568,6 +1911,7 @@ def rhs_split_conservative_exchange(
     surface_inverse_mass_T: np.ndarray | None = None,
     volume_split_cache: dict | None = None,
     physical_boundary_mode: str = "exact_qb",
+    face_order_mode: str = "triangle",
     q_boundary_correction=None,
     q_boundary_correction_mode: str = "inflow",
     X_nodes: np.ndarray | None = None,
@@ -1612,6 +1956,7 @@ def rhs_split_conservative_exchange(
         ndotV_flat_precomputed=ndotV_flat_precomputed,
         surface_inverse_mass_T=surface_inverse_mass_T,
         physical_boundary_mode=physical_boundary_mode,
+        face_order_mode=face_order_mode,
         q_boundary_correction=q_boundary_correction,
         q_boundary_correction_mode=q_boundary_correction_mode,
         X_nodes=X_nodes,

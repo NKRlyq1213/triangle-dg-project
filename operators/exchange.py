@@ -19,6 +19,24 @@ def _should_use_numba(use_numba: bool | None) -> bool:
 
 if _NUMBA_AVAILABLE:
     @njit(cache=True)
+    def _evaluate_embedded_face_values_kernel_inplace(
+        u_elem: np.ndarray,
+        ids_f1: np.ndarray,
+        ids_f2: np.ndarray,
+        ids_f3: np.ndarray,
+        out: np.ndarray,
+    ) -> None:
+        K = u_elem.shape[0]
+        nfp = ids_f1.size
+
+        for k in range(K):
+            for i in range(nfp):
+                out[k, 0, i] = u_elem[k, ids_f1[i]]
+                out[k, 1, i] = u_elem[k, ids_f2[i]]
+                out[k, 2, i] = u_elem[k, ids_f3[i]]
+
+
+    @njit(cache=True)
     def _pair_face_traces_kernel_inplace(
         uM: np.ndarray,
         EToE: np.ndarray,
@@ -52,6 +70,7 @@ if _NUMBA_AVAILABLE:
                         uP[k, jf, i] = uM[nbr, nbr_jf, i]
 
 else:
+    _evaluate_embedded_face_values_kernel_inplace = None
     _pair_face_traces_kernel_inplace = None
 
 
@@ -59,6 +78,7 @@ def evaluate_all_face_values(
     u_elem: np.ndarray,
     trace: dict,
     out: np.ndarray | None = None,
+    use_numba: bool | None = None,
 ) -> np.ndarray:
     """
     Evaluate all local face traces for all elements.
@@ -94,13 +114,40 @@ def evaluate_all_face_values(
     mode = str(trace.get("trace_mode", "")).lower().strip()
 
     if mode == "embedded":
-        for face_id in (1, 2, 3):
-            ids = np.asarray(trace["face_node_ids"][face_id], dtype=int).reshape(-1)
-            if ids.size != nfp:
-                raise ValueError(
-                    f"Face {face_id} has {ids.size} trace nodes, expected {nfp}."
-                )
-            out[:, face_id - 1, :] = u_elem[:, ids]
+        ids_f1 = np.asarray(trace["face_node_ids"][1], dtype=np.int64).reshape(-1)
+        ids_f2 = np.asarray(trace["face_node_ids"][2], dtype=np.int64).reshape(-1)
+        ids_f3 = np.asarray(trace["face_node_ids"][3], dtype=np.int64).reshape(-1)
+        if ids_f1.size != nfp:
+            raise ValueError(f"Face 1 has {ids_f1.size} trace nodes, expected {nfp}.")
+        if ids_f2.size != nfp:
+            raise ValueError(f"Face 2 has {ids_f2.size} trace nodes, expected {nfp}.")
+        if ids_f3.size != nfp:
+            raise ValueError(f"Face 3 has {ids_f3.size} trace nodes, expected {nfp}.")
+
+        if _should_use_numba(use_numba):
+            u_numba = u_elem
+            if u_numba.dtype != np.float64 or (not u_numba.flags.c_contiguous):
+                u_numba = np.ascontiguousarray(u_numba, dtype=np.float64)
+
+            out_numba = out
+            if out_numba.dtype != np.float64 or (not out_numba.flags.c_contiguous):
+                out_numba = np.ascontiguousarray(out_numba, dtype=np.float64)
+
+            _evaluate_embedded_face_values_kernel_inplace(
+                u_elem=u_numba,
+                ids_f1=np.ascontiguousarray(ids_f1, dtype=np.int64),
+                ids_f2=np.ascontiguousarray(ids_f2, dtype=np.int64),
+                ids_f3=np.ascontiguousarray(ids_f3, dtype=np.int64),
+                out=out_numba,
+            )
+
+            if out_numba is not out:
+                out[...] = out_numba
+            return out
+
+        out[:, 0, :] = u_elem[:, ids_f1]
+        out[:, 1, :] = u_elem[:, ids_f2]
+        out[:, 2, :] = u_elem[:, ids_f3]
         return out
 
     if mode == "projected":
@@ -222,7 +269,7 @@ def pair_face_traces(
     if face_flip.shape != EToE.shape:
         raise ValueError("conn['face_flip'] shape must match (K, 3).")
 
-    uM = evaluate_all_face_values(u_elem, trace, out=out_uM)
+    uM = evaluate_all_face_values(u_elem, trace, out=out_uM, use_numba=use_numba)
 
     if out_uP is None:
         uP = np.empty_like(uM, dtype=float)

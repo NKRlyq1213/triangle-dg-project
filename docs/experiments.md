@@ -1,9 +1,10 @@
 ﻿# Experiments / 實驗說明
 
 This document tracks canonical experiment entry points, output locations, and
-the current LSRK-related CLI surface.
+the current LSRK-related CLI contract.
 
-本文件整理目前標準實驗入口、輸出位置，以及 LSRK 相關 CLI 介面。
+本文件整理目前標準實驗入口、輸出位置，以及 LSRK 相關 CLI 契約
+（參數、互動規則、限制條件、輸出行為）。
 
 ## Canonical Entry Points / 標準入口
 
@@ -27,6 +28,27 @@ implementations, but they are compatibility shims.
 
 `demo.experiments.*` 仍可使用，但僅作為相容層；正式流程建議使用 `cli.*`。
 
+## LSRK CLI Decision Flow / LSRK CLI 決策流程
+
+1. Choose your goal / 先選目標
+   - `python -m cli.run_lsrk_h_convergence`: h-convergence table (CSV-first)
+   - `python -m cli.plot_lsrk_error_vs_time`: time-history curves (PNG+CSV)
+2. Choose trace geometry behavior / 再選 trace 幾何行為
+   - `--physical-boundary-mode {exact_qb,opposite_boundary,periodic_vmap}`
+   - `--interior-trace-mode {exchange,exact_trace}`
+   - `--face-order-mode {triangle,simplex,simplex_strict}`
+3. Choose lifting and penalties / 再選 lifting 與數值耗散
+   - `--surface-inverse-mass-mode {diagonal,projected}`
+   - `--tau`, `--tau-interior`, `--tau-qb`
+4. Choose correction mode / 最後選 correction
+   - h-convergence: `--qb-correction {off,on,compare}`
+   - error-vs-time: `--qb-correction {off,on}`
+
+If the selected combination violates a runtime constraint, the CLI raises a
+`ValueError` with an explicit reason.
+
+若參數組合違反目前限制，CLI 會直接丟出 `ValueError` 並附上原因。
+
 ## LSRK h-Convergence CLI / LSRK h-收斂 CLI
 
 Command:
@@ -35,59 +57,63 @@ Command:
 python -m cli.run_lsrk_h_convergence
 ```
 
-Visible parameters:
+### Parameters (visible) / 可見參數
 
-- `--preset {quick,full}`
-  Default: `quick`
+- `--preset {quick,full,upstream-pbc}`
+  Effective default: `quick`
 - `--qb-correction {off,on,compare}`
-  Default: `off`
+  Effective default: `off`
 - `--surface-inverse-mass-mode {diagonal,projected}`
   Default: `diagonal`
 - `--test-function {sin2pi_x,sin2pi_y,sin2pi_xy}`
   Default: `sin2pi_x`
-- `--physical-boundary-mode {exact_qb,opposite_boundary}`
+- `--physical-boundary-mode {exact_qb,opposite_boundary,periodic_vmap}`
   Default: `exact_qb`
 - `--interior-trace-mode {exchange,exact_trace}`
   Default: `exchange`
+- `--face-order-mode {triangle,simplex,simplex_strict}`
+  Default: `triangle`
 - `--tau FLOAT`
   Default: `0.0`
 - `--tau-interior FLOAT`
   Default: unset; falls back to `--tau`
 - `--tau-qb FLOAT`
   Default: unset; falls back to `--tau`
+- `--diagonal {main,anti}`
+  Default: unset; if set, overrides preset diagonal
+- `--mesh-levels INT [INT ...]`
+  Default: unset; if set, overrides preset mesh levels
+- `--tf-values FLOAT [FLOAT ...]`
+  Default: unset; if set, overrides preset final times
+- `--use-numba` / `--no-use-numba`
+  Default: enabled (`--use-numba`)
 
-可見參數如上；若未指定，會採用 Default 值。
-
-Hidden compatibility parameters:
+Hidden compatibility flags (legacy, not recommended for new runs):
 
 - `--compare-qb-correction`
 - `--qb-correction-only`
 
-Examples:
+隱藏旗標僅保留相容用途，不建議新流程使用。
 
-```bash
-python -m cli.run_lsrk_h_convergence --preset quick
-python -m cli.run_lsrk_h_convergence --preset quick --qb-correction compare
-python -m cli.run_lsrk_h_convergence --preset quick --qb-correction on
-python -m cli.run_lsrk_h_convergence --preset quick --test-function sin2pi_xy
-python -m cli.run_lsrk_h_convergence --preset quick --interior-trace-mode exact_trace
-python -m cli.run_lsrk_h_convergence --preset quick --interior-trace-mode exact_trace --physical-boundary-mode opposite_boundary
-python -m cli.run_lsrk_h_convergence --preset quick --tau 0.4
-python -m cli.run_lsrk_h_convergence --preset quick --tau-interior 0.1 --tau-qb 0.6
-```
+### Runtime Logic / 執行邏輯
 
-Behavior notes:
-
-- `quick` uses `mesh_levels=(1,2,4,8,16)` and `tf=2*pi`
-- `full` uses `mesh_levels=(1,2,4,8,16,32)` and `tf=1`
-- `compare` writes separate baseline and corrected CSVs
-- `on` writes only the corrected run
-- `off` writes only the baseline run
-- `qb-correction` evolves exact-source traces via RK-stage correction instead of reapplying exact values at every stage
-- `tau=0` is pure upwind
-- `--tau` is the shared fallback value for both tau roles
-- `--tau-interior` applies to all interior faces and all non-`exact_qb` exterior traces
-- `--tau-qb` applies only to physical-boundary faces when `physical-boundary-mode=exact_qb`
+- `preset` picks baseline mesh/tf/diagonal; current built-ins:
+  - `quick`: `mesh_levels=(1,2,4,8,16)`, `tf_values=(3*pi,)`, `diagonal=anti`
+  - `full`: `mesh_levels=(1,2,4,8,16,32)`, `tf_values=(3*pi,)`, `diagonal=anti`
+  - `upstream-pbc`: `mesh_levels=(1,2,4,8,16,32,64)`, `tf_values=(3*pi,)`, `diagonal=anti`
+- Override priority is explicit:
+  - `--mesh-levels`, `--tf-values`, `--diagonal` replace preset values
+  - If you do not pass them, preset values remain active
+- Execution backend:
+  - default uses numba fast path (`--use-numba`)
+  - `--no-use-numba` forces numpy fallback
+- Tau role split is fixed:
+  - `tau_interior` is used on interior and non-`exact_qb` exterior traces
+  - `tau_qb` is used only on `physical-boundary-mode=exact_qb` faces
+- `qb-correction` behavior:
+  - `off`: baseline only
+  - `on`: corrected only (`rk-stage exact-source correction`)
+  - `compare`: baseline and corrected are both run and exported
 
 ## LSRK Error-vs-Time CLI / LSRK 誤差-時間 CLI
 
@@ -97,19 +123,28 @@ Command:
 python -m cli.plot_lsrk_error_vs_time
 ```
 
-Visible parameters:
+### Parameters (visible) / 可見參數
 
 - `--mesh-level INT`
   Default: `8`
 - `--mesh-levels INT [INT ...]`
+  Optional multi-run overlay; takes priority when provided
 - `--tf FLOAT`
   Default: `1.0`
 - `--cfl FLOAT`
   Default: `1.0`
+- `--diagonal {anti,main}`
+  Default: `anti`
+- `--h-definition {min-altitude,min-edge}`
+  Default: `min-altitude`
+- `--dt-cfl-mode {n2,nplus1-squared}`
+  Default: `n2`
 - `--test-function {sin2pi_x,sin2pi_y,sin2pi_xy}`
   Default: `sin2pi_x`
-- `--physical-boundary-mode {exact_qb,opposite_boundary}`
+- `--physical-boundary-mode {exact_qb,opposite_boundary,periodic_vmap}`
   Default: `exact_qb`
+- `--face-order-mode {triangle,simplex,simplex_strict}`
+  Default: `triangle`
 - `--interior-trace-mode {exchange,exact_trace}`
   Default: `exchange`
 - `--qb-correction {off,on}`
@@ -123,40 +158,91 @@ Visible parameters:
 - `--tau-qb FLOAT`
   Default: unset; falls back to `--tau`
 - `--output PATH`
-  Default: auto-generated path under `experiments_outputs/lsrk_error_vs_time/`
+  Default: auto-generated stem under `experiments_outputs/lsrk_error_vs_time/`
 
-Hidden internal parameters:
+Hidden internal flags:
 
-- `--q-boundary-correction-mode {inflow,boundary,all}`
-  Default: `all`
-- `--use-numba` / `--no-use-numba`
-  Default: enabled
+- `--q-boundary-correction-mode {inflow,boundary,all}` (default `all`)
+- `--use-numba` / `--no-use-numba` (default enabled)
 
-Examples:
+### Runtime Logic / 執行邏輯
+
+- Mesh-level selection:
+  - if `--mesh-levels` is provided, it is used
+  - otherwise, CLI uses `--mesh-level`
+  - duplicated levels are de-duplicated while preserving order
+- CFL timestep control:
+  - `--h-definition=min-altitude|min-edge` controls which element size is used for `h`
+  - `--dt-cfl-mode=n2|nplus1-squared` controls denominator scaling (`N^2` vs `(N+1)^2`)
+- Output path:
+  - no `--output`: auto-generate `.png` and matching `.csv` in canonical output dir
+  - relative `--output`: resolved from project root
+
+## Compatibility Matrix / 相容性矩陣
+
+The following are enforced by runtime checks:
+
+| Condition | Status | Reason |
+| --- | --- | --- |
+| `interior-trace-mode=exact_trace` + `face-order-mode=simplex` | Invalid | `simplex` currently supports `exchange` only |
+| `interior-trace-mode=exact_trace` + `face-order-mode=simplex_strict` | Invalid | `simplex_strict` currently supports `exchange` only |
+| `face-order-mode=simplex_strict` + `surface-inverse-mass-mode=diagonal` | Invalid | `simplex_strict` requires `projected` |
+| `interior-trace-mode=exact_trace` + `surface-inverse-mass-mode=projected` | Invalid | projected lifting not supported with exact interior trace |
+| `qb-correction=on/compare` + no exact source | Invalid | requires `interior-trace-mode=exact_trace` or `physical-boundary-mode=exact_qb` |
+
+## Scenario-Driven Examples / 情境導向範例
+
+### 1) Quick sanity / 快速健檢
 
 ```bash
-python -m cli.plot_lsrk_error_vs_time --mesh-level 8 --tf 1.0
-python -m cli.plot_lsrk_error_vs_time --mesh-levels 8 16 32 --tf 6.283185307179586 --test-function sin2pi_xy --qb-correction on
-python -m cli.plot_lsrk_error_vs_time --mesh-level 16 --interior-trace-mode exact_trace --physical-boundary-mode exact_qb
-python -m cli.plot_lsrk_error_vs_time --mesh-level 16 --interior-trace-mode exact_trace --physical-boundary-mode opposite_boundary
-python -m cli.plot_lsrk_error_vs_time --mesh-level 16 --tau 0.4
-python -m cli.plot_lsrk_error_vs_time --mesh-level 16 --tau-interior 0.1 --tau-qb 0.6
+python -m cli.run_lsrk_h_convergence --preset quick
 ```
 
-The penalty still uses
-`f* = 1/2[(n·V)qM + (n·V)qP] + (1-tau)/2 |n·V| (qM - qP)`;
-`tau=0` is pure upwind.
-`--tau-interior` supplies `tau` on all interior faces and on `opposite_boundary` physical faces.
-`--tau-qb` supplies `tau` only on `physical-boundary-mode=exact_qb` faces.
-If a specialized tau is omitted, it falls back to `--tau`.
+### 2) Full convergence / 完整收斂
 
-## Current Constraints / 目前限制
+```bash
+python -m cli.run_lsrk_h_convergence --preset full
+```
 
-- `interior-trace-mode=exact_trace` does not support `surface-inverse-mass-mode=projected`
-- `qb-correction` requires at least one exact source:
-  `interior-trace-mode=exact_trace` or `physical-boundary-mode=exact_qb`
+### 3) Upstream PBC alignment / 對齊 upstream PBC 風格
 
-以上限制為目前實作行為，若違反會在執行時拋出錯誤或忽略校正。
+```bash
+python -m cli.run_lsrk_h_convergence --preset upstream-pbc --physical-boundary-mode periodic_vmap --face-order-mode simplex
+```
+
+### 4) Enable periodic coordinate mapping / 開啟 periodic_vmap
+
+```bash
+python -m cli.run_lsrk_h_convergence --preset quick --physical-boundary-mode periodic_vmap
+```
+
+### 5) `simplex_strict + projected` / 嚴格 simplex 面序
+
+```bash
+python -m cli.run_lsrk_h_convergence --preset quick --face-order-mode simplex_strict --surface-inverse-mass-mode projected --interior-trace-mode exchange
+```
+
+### 6) Compare baseline vs correction / 比較 baseline 與修正
+
+```bash
+python -m cli.run_lsrk_h_convergence --preset quick --physical-boundary-mode exact_qb --qb-correction compare
+```
+
+### 7) Multi-mesh error-vs-time overlay / 多網格誤差隨時間曲線
+
+```bash
+python -m cli.plot_lsrk_error_vs_time --mesh-levels 8 16 32 --tf 1.0 --test-function sin2pi_xy --physical-boundary-mode periodic_vmap --face-order-mode simplex
+```
+
+### Expected invalid examples / 預期失敗範例
+
+```bash
+# invalid: simplex_strict requires projected
+python -m cli.plot_lsrk_error_vs_time --face-order-mode simplex_strict --surface-inverse-mass-mode diagonal
+
+# invalid: correction needs at least one exact source
+python -m cli.plot_lsrk_error_vs_time --physical-boundary-mode opposite_boundary --interior-trace-mode exchange --qb-correction on
+```
 
 ## Output Naming / 輸出命名
 
@@ -168,20 +254,29 @@ Ad hoc profiling, scratch, or preserved legacy artifacts should be written under
 臨時 profiling、檢查圖、分析檔或保留的 legacy artifacts 則集中放在
 `experiments_outputs/scratch/`。
 
-LSRK h-convergence CSVs:
+### LSRK h-convergence CSV stems
 
-- Base stem: `lsrk_h_convergence_{test_function}_tf{tf}_table1_order{order}_N{N}_{diagonal}_taui{tau_interior}_tauqb{tau_qb}`
-- Compare mode suffixes: `_baseline.csv`, `_rkstage_qb.csv`
-- Correction-only suffix: `_rkstage_qb_only.csv`
-- Quick runs append `_quick`
-- Non-exchange trace runs append `_{interior_trace_mode}`
+Base stem:
 
-LSRK error-vs-time outputs:
+`lsrk_h_convergence_{test_function}_tf{tf}_table1_order{order}_N{N}_{diagonal}_face{face_order_mode}_{surface_inverse_mass_mode}_{physical_boundary_mode}_taui{tau_interior}_tauqb{tau_qb}`
+
+Suffix rules:
+
+- `qb-correction=off`: `.csv`
+- `qb-correction=on`: `_rkstage_qb_only.csv`
+- `qb-correction=compare`: `_baseline.csv` and `_rkstage_qb.csv`
+- `interior-trace-mode!=exchange`: append `_{interior_trace_mode}`
+- `preset!=full`: append `_{preset}`
+
+### LSRK error-vs-time outputs
 
 - Stored under `experiments_outputs/lsrk_error_vs_time/`
-- A `.png` plot and matching `.csv` are written with the same stem
-- The auto-generated stem includes `tf`, mesh levels, test function, boundary mode,
-  surface inverse mass mode, `tau_interior`, `tau_qb`, qB mode, and optional trace mode
+- Auto mode writes a `.png` and matching `.csv` with same stem
+- Auto stem includes:
+  `tf`, mesh-level tags, test function, boundary mode,
+  surface inverse-mass mode, diagonal, face order mode, `h` tag, `dt` CFL tag,
+  `tau_interior`, `tau_qb`, and qB mode
+- If `interior-trace-mode!=exchange`, stem appends `_{interior_trace_mode}`
 
 Current canonical layout:
 
