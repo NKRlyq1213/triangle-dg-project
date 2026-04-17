@@ -371,15 +371,21 @@ def build_polynomial_l2_projector_from_rule(rule: dict, N: int) -> np.ndarray:
 
 
 def build_projected_inverse_mass_from_rule(rule: dict, N: int) -> np.ndarray:
-    projector = build_polynomial_l2_projector_from_rule(rule, N)
+    rs = np.asarray(rule["rs"], dtype=float)
     ws = np.asarray(rule["ws"], dtype=float).reshape(-1)
-    if projector.shape != (ws.size, ws.size):
-        raise ValueError("Projected inverse-mass size must be (Np, Np).")
     if np.any(ws <= 0.0):
         raise ValueError("rule['ws'] must be strictly positive.")
 
-    inv_ws = 1.0 / ws
-    return projector * inv_ws[None, :]
+    V = vandermonde2d(N, rs[:, 0], rs[:, 1])
+    area = reference_triangle_area()
+    M = mass_matrix_from_quadrature(V, ws, area=area)
+
+    rhs = area * V.T
+    projected_inverse_mass = V @ np.linalg.inv(M) @ rhs
+    if projected_inverse_mass.shape != (ws.size, ws.size):
+        raise ValueError("Projected inverse-mass size must be (Np, Np).")
+
+    return projected_inverse_mass
 
 
 def q_exact_sinx(x: np.ndarray, y: np.ndarray, t: float = 0.0) -> np.ndarray:
@@ -451,8 +457,10 @@ def _validate_config(config: LSRKHConvergenceConfig) -> None:
             "test_function_mode must be one of: 'sin2pi_x', 'sin2pi_y', 'sin2pi_xy'."
         )
     physical_boundary_mode = str(config.physical_boundary_mode).strip().lower()
-    if physical_boundary_mode not in ("exact_qb", "opposite_boundary"):
-        raise ValueError("physical_boundary_mode must be one of: 'exact_qb', 'opposite_boundary'.")
+    if physical_boundary_mode not in ("exact_qb", "opposite_boundary", "periodic_vmap"):
+        raise ValueError(
+            "physical_boundary_mode must be one of: 'exact_qb', 'opposite_boundary', 'periodic_vmap'."
+        )
     if interior_trace_mode == "exact_trace" and surface_inverse_mass_mode != "diagonal":
         raise ValueError(
             "surface_inverse_mass_mode='projected' is not supported with interior_trace_mode='exact_trace'."
@@ -558,6 +566,8 @@ def _prepare_level_state(
             trace=trace,
             conn=conn,
             face_geom=face_geom,
+            X_nodes=X,
+            Y_nodes=Y,
         )
 
     u_face, v_face = velocity(
@@ -676,6 +686,8 @@ def _build_rhs_function(
                 physical_boundary_mode=context["physical_boundary_mode"],
                 q_boundary_correction=q_boundary_correction,
                 q_boundary_correction_mode=context["q_boundary_correction_mode"],
+                X_nodes=level_state["X"],
+                Y_nodes=level_state["Y"],
             )
             return total_rhs
 
@@ -775,6 +787,7 @@ def _run_lsrk_h_convergence_for_tf(
             "hmin": float(level_state["hmin"]),
             "Np": Np,
             "total_dof": int(total_dof),
+            "diagonal": str(config.diagonal),
             "tf_target": tf_target,
             "tf": float(tf_used),
             "reached_tf": reached_tf,

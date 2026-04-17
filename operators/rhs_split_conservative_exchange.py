@@ -559,6 +559,10 @@ def _apply_exact_source_q_correction(
     return qP
 
 
+def _coord_key(x_val: float, y_val: float, tol: float) -> tuple[int, int]:
+    return (int(np.round(float(x_val) / tol)), int(np.round(float(y_val) / tol)))
+
+
 def _pair_boundary_faces_by_axis(
     faces_a: list[tuple[int, int]],
     faces_b: list[tuple[int, int]],
@@ -752,11 +756,132 @@ def _build_boundary_state_from_opposite_boundary(
     return qB_flat.reshape(K, 3, nfp)
 
 
+def _build_periodic_boundary_node_map(
+    X_nodes: np.ndarray,
+    Y_nodes: np.ndarray,
+    *,
+    owner_elem_flat: np.ndarray,
+    owner_node_ids_flat: np.ndarray,
+    boundary_flat: np.ndarray,
+    tol: float = 1e-12,
+) -> tuple[np.ndarray, np.ndarray]:
+    X_nodes = np.asarray(X_nodes, dtype=float)
+    Y_nodes = np.asarray(Y_nodes, dtype=float)
+    owner_elem_flat = np.asarray(owner_elem_flat, dtype=np.int64)
+    owner_node_ids_flat = np.asarray(owner_node_ids_flat, dtype=np.int64)
+    boundary_flat = np.asarray(boundary_flat, dtype=bool).reshape(-1)
+
+    if X_nodes.shape != Y_nodes.shape or X_nodes.ndim != 2:
+        raise ValueError("X_nodes and Y_nodes must both have shape (K, Np).")
+    if owner_node_ids_flat.ndim != 2:
+        raise ValueError("owner_node_ids_flat must have shape (3*K, Nfp).")
+    if owner_elem_flat.ndim != 1 or owner_elem_flat.size != owner_node_ids_flat.shape[0]:
+        raise ValueError("owner_elem_flat must have shape (3*K,) matching owner_node_ids_flat.")
+    if boundary_flat.size != owner_node_ids_flat.shape[0]:
+        raise ValueError("boundary_flat must have shape (3*K,) matching owner_node_ids_flat.")
+    if tol <= 0.0:
+        raise ValueError("tol must be positive.")
+
+    K, Np = X_nodes.shape
+    nf, nfp = owner_node_ids_flat.shape
+    if nf != 3 * K:
+        raise ValueError("owner_node_ids_flat must have shape (3*K, Nfp) matching X_nodes.")
+
+    partner_elem_flat = -np.ones((nf, nfp), dtype=np.int64)
+    partner_node_ids_flat = -np.ones((nf, nfp), dtype=np.int64)
+
+    x_flat = X_nodes.reshape(-1)
+    y_flat = Y_nodes.reshape(-1)
+    xmin = float(np.min(x_flat))
+    xmax = float(np.max(x_flat))
+    ymin = float(np.min(y_flat))
+    ymax = float(np.max(y_flat))
+
+    coord_lookup: dict[tuple[int, int], list[int]] = {}
+    for gid in range(x_flat.size):
+        key = _coord_key(x_flat[gid], y_flat[gid], tol)
+        coord_lookup.setdefault(key, []).append(int(gid))
+
+    boundary_idx = np.nonzero(boundary_flat)[0]
+    for face_idx in boundary_idx:
+        elem_idx = int(owner_elem_flat[face_idx])
+        for j in range(nfp):
+            node_id = int(owner_node_ids_flat[face_idx, j])
+            gid_m = elem_idx * Np + node_id
+
+            x_m = float(X_nodes[elem_idx, node_id])
+            y_m = float(Y_nodes[elem_idx, node_id])
+            x_target = x_m
+            y_target = y_m
+
+            if np.isclose(x_m, xmin, atol=tol, rtol=tol):
+                x_target = xmax
+            elif np.isclose(x_m, xmax, atol=tol, rtol=tol):
+                x_target = xmin
+
+            if np.isclose(y_m, ymin, atol=tol, rtol=tol):
+                y_target = ymax
+            elif np.isclose(y_m, ymax, atol=tol, rtol=tol):
+                y_target = ymin
+
+            key_target = _coord_key(x_target, y_target, tol)
+            candidates = coord_lookup.get(key_target, [])
+            if not candidates:
+                raise ValueError(
+                    "Unable to build periodic_vmap boundary map: no nodal counterpart "
+                    f"for boundary node ({x_m:.16e}, {y_m:.16e}) targeting "
+                    f"({x_target:.16e}, {y_target:.16e})."
+                )
+
+            gid_p = next((cand for cand in candidates if cand != gid_m), candidates[0])
+            partner_elem_flat[face_idx, j] = gid_p // Np
+            partner_node_ids_flat[face_idx, j] = gid_p % Np
+
+    missing = np.nonzero(boundary_flat[:, None] & (partner_elem_flat < 0))
+    if missing[0].size > 0:
+        raise ValueError("Periodic_vmap boundary map is incomplete for the current mesh.")
+
+    return partner_elem_flat, partner_node_ids_flat
+
+
+def _build_boundary_state_from_periodic_vmap(
+    q_elem: np.ndarray,
+    cache: dict,
+) -> np.ndarray:
+    q_elem = np.asarray(q_elem, dtype=float)
+    K = int(cache["K"])
+    nfp = int(cache["nfp"])
+    nf = 3 * K
+
+    partner_elem_flat = cache.get("periodic_vmap_elem_flat_numba", None)
+    partner_node_ids_flat = cache.get("periodic_vmap_node_ids_flat_numba", None)
+    if partner_elem_flat is None or partner_node_ids_flat is None:
+        raise ValueError(
+            "surface_cache missing periodic_vmap node map; rebuild cache with nodal coordinates "
+            "for physical_boundary_mode='periodic_vmap'."
+        )
+
+    partner_elem_flat = np.asarray(partner_elem_flat, dtype=np.int64)
+    partner_node_ids_flat = np.asarray(partner_node_ids_flat, dtype=np.int64)
+    boundary_flat = np.asarray(cache["boundary_flat"], dtype=bool)
+    if partner_elem_flat.shape != (nf, nfp) or partner_node_ids_flat.shape != (nf, nfp):
+        raise ValueError("periodic_vmap node map must have shape (3*K, Nfp).")
+
+    qB_flat = np.zeros((nf, nfp), dtype=float)
+    boundary_idx = np.nonzero(boundary_flat)[0]
+    for idx in boundary_idx:
+        qB_flat[idx, :] = q_elem[partner_elem_flat[idx, :], partner_node_ids_flat[idx, :]]
+
+    return qB_flat.reshape(K, 3, nfp)
+
+
 def build_surface_exchange_cache(
     rule: dict,
     trace: dict,
     conn: dict,
     face_geom: dict,
+    X_nodes: np.ndarray | None = None,
+    Y_nodes: np.ndarray | None = None,
 ) -> dict:
     """
     Precompute static data used by the surface exchange term.
@@ -888,6 +1013,23 @@ def build_surface_exchange_cache(
     opposite_face_flat_numba = np.ascontiguousarray(opposite_face_flat, dtype=np.int64)
     opposite_flip_flat_numba = np.ascontiguousarray(opposite_flip_flat, dtype=np.bool_)
 
+    periodic_vmap_elem_flat = None
+    periodic_vmap_node_ids_flat = None
+    periodic_vmap_elem_flat_numba = None
+    periodic_vmap_node_ids_flat_numba = None
+    if X_nodes is not None or Y_nodes is not None:
+        if X_nodes is None or Y_nodes is None:
+            raise ValueError("X_nodes and Y_nodes must either both be provided or both be None.")
+        periodic_vmap_elem_flat, periodic_vmap_node_ids_flat = _build_periodic_boundary_node_map(
+            X_nodes,
+            Y_nodes,
+            owner_elem_flat=owner_elem_flat_numba,
+            owner_node_ids_flat=owner_node_ids_flat_numba,
+            boundary_flat=boundary_flat,
+        )
+        periodic_vmap_elem_flat_numba = np.ascontiguousarray(periodic_vmap_elem_flat, dtype=np.int64)
+        periodic_vmap_node_ids_flat_numba = np.ascontiguousarray(periodic_vmap_node_ids_flat, dtype=np.int64)
+
     return {
         "K": K,
         "Np": int(ws.size),
@@ -931,6 +1073,10 @@ def build_surface_exchange_cache(
         "opposite_boundary_flip_flat": opposite_flip_flat,
         "opposite_boundary_face_flat_numba": opposite_face_flat_numba,
         "opposite_boundary_flip_flat_numba": opposite_flip_flat_numba,
+        "periodic_vmap_elem_flat": periodic_vmap_elem_flat,
+        "periodic_vmap_node_ids_flat": periodic_vmap_node_ids_flat,
+        "periodic_vmap_elem_flat_numba": periodic_vmap_elem_flat_numba,
+        "periodic_vmap_node_ids_flat_numba": periodic_vmap_node_ids_flat_numba,
     }
 
 
@@ -1051,6 +1197,8 @@ def surface_term_from_exchange(
     q_boundary_correction=None,
     q_boundary_correction_mode: str = "inflow",
     volume_split_cache: dict | None = None,
+    X_nodes: np.ndarray | None = None,
+    Y_nodes: np.ndarray | None = None,
 ) -> tuple[np.ndarray, dict]:
     """
     Surface term using actual interior face exchange plus prescribed boundary traces.
@@ -1067,7 +1215,28 @@ def surface_term_from_exchange(
     if trace.get("trace_mode", None) != "embedded":
         raise ValueError("This phase currently supports Table 1 embedded trace only.")
 
-    cache = build_surface_exchange_cache(rule, trace, conn, face_geom) if surface_cache is None else surface_cache
+    boundary_mode = str(physical_boundary_mode).strip().lower()
+    if boundary_mode not in ("exact_qb", "opposite_boundary", "periodic_vmap"):
+        raise ValueError(
+            "physical_boundary_mode must be one of: 'exact_qb', 'opposite_boundary', 'periodic_vmap'."
+        )
+
+    if surface_cache is None:
+        if boundary_mode == "periodic_vmap" and (X_nodes is None or Y_nodes is None):
+            raise ValueError(
+                "physical_boundary_mode='periodic_vmap' requires nodal coordinates X_nodes and Y_nodes "
+                "when surface_cache is not provided."
+            )
+        cache = build_surface_exchange_cache(
+            rule,
+            trace,
+            conn,
+            face_geom,
+            X_nodes=X_nodes if boundary_mode == "periodic_vmap" else None,
+            Y_nodes=Y_nodes if boundary_mode == "periodic_vmap" else None,
+        )
+    else:
+        cache = surface_cache
 
     K, Np = q_elem.shape
     if int(cache["K"]) != K or int(cache["Np"]) != Np:
@@ -1102,13 +1271,10 @@ def surface_term_from_exchange(
             u_face = np.asarray(u_face, dtype=float)
             v_face = np.asarray(v_face, dtype=float)
 
-    boundary_mode = str(physical_boundary_mode).strip().lower()
-    if boundary_mode not in ("exact_qb", "opposite_boundary"):
-        raise ValueError("physical_boundary_mode must be one of: 'exact_qb', 'opposite_boundary'.")
     if q_boundary_correction is not None and boundary_mode != "exact_qb":
         raise ValueError(
             "q_boundary_correction requires an exact boundary source; "
-            "physical_boundary_mode='opposite_boundary' does not provide one."
+            "only physical_boundary_mode='exact_qb' provides one."
         )
 
     qB_exact = None
@@ -1117,6 +1283,8 @@ def surface_term_from_exchange(
             raise ValueError("q_boundary callback is required when physical_boundary_mode='exact_qb'.")
         qB_exact = np.asarray(q_boundary(x_face, y_face, t), dtype=float)
         qP_boundary = np.array(qB_exact, dtype=float, copy=True)
+    elif boundary_mode == "periodic_vmap":
+        qP_boundary = _build_boundary_state_from_periodic_vmap(q_elem=q_elem, cache=cache)
     else:
         qP_boundary = _build_boundary_state_from_opposite_boundary(q_elem=q_elem, cache=cache)
 
@@ -1402,6 +1570,8 @@ def rhs_split_conservative_exchange(
     physical_boundary_mode: str = "exact_qb",
     q_boundary_correction=None,
     q_boundary_correction_mode: str = "inflow",
+    X_nodes: np.ndarray | None = None,
+    Y_nodes: np.ndarray | None = None,
 ) -> tuple[np.ndarray, dict]:
     """
     Full semi-discrete RHS using actual interior face exchange.
@@ -1444,6 +1614,8 @@ def rhs_split_conservative_exchange(
         physical_boundary_mode=physical_boundary_mode,
         q_boundary_correction=q_boundary_correction,
         q_boundary_correction_mode=q_boundary_correction_mode,
+        X_nodes=X_nodes,
+        Y_nodes=Y_nodes,
     )
 
     if not return_diagnostics:

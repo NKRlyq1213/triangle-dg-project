@@ -17,11 +17,13 @@ except Exception:  # pragma: no cover - optional acceleration
 
 from operators.divergence_split import mapped_divergence_split_2d
 from operators.exchange import evaluate_all_face_values
+from geometry.affine_map import map_reference_nodes_to_all_elements
 from geometry.face_metrics import affine_face_geometry_from_mesh
 from geometry.connectivity import build_face_connectivity
 from operators.rhs_split_conservative_exchange import (
     _apply_exact_source_q_correction,
     _build_boundary_state_from_opposite_boundary,
+    _build_boundary_state_from_periodic_vmap,
     build_face_tau_array,
     build_surface_exchange_cache,
 )
@@ -262,8 +264,18 @@ def surface_term_from_exact_trace(
     if conn is None:
         conn = build_face_connectivity(VX, VY, EToV, classify_boundary="box")
 
+    boundary_mode = str(physical_boundary_mode).strip().lower()
+    if boundary_mode not in ("exact_qb", "opposite_boundary", "periodic_vmap"):
+        raise ValueError(
+            "physical_boundary_mode must be one of: 'exact_qb', 'opposite_boundary', 'periodic_vmap'."
+        )
+
+    X_nodes = Y_nodes = None
+    if boundary_mode == "periodic_vmap":
+        X_nodes, Y_nodes = map_reference_nodes_to_all_elements(rule["rs"], VX, VY, EToV)
+
     cache = (
-        build_surface_exchange_cache(rule, trace, conn, face_geom)
+        build_surface_exchange_cache(rule, trace, conn, face_geom, X_nodes=X_nodes, Y_nodes=Y_nodes)
         if surface_cache is None
         else surface_cache
     )
@@ -287,9 +299,6 @@ def surface_term_from_exact_trace(
         raise ValueError("q_exact must return arrays with shape (K, 3, Nfp).")
 
     ndotV = nx * u_face + ny * v_face
-    boundary_mode = str(physical_boundary_mode).strip().lower()
-    if boundary_mode not in ("exact_qb", "opposite_boundary"):
-        raise ValueError("physical_boundary_mode must be one of: 'exact_qb', 'opposite_boundary'.")
 
     qP = np.empty_like(qM)
     qP[interior_faces] = qB_interior_exact[interior_faces]
@@ -301,6 +310,9 @@ def surface_term_from_exact_trace(
         if qB_boundary_exact.shape != qM.shape:
             raise ValueError("q_boundary must return arrays with shape (K, 3, Nfp).")
         qP[is_boundary] = qB_boundary_exact[is_boundary]
+    elif boundary_mode == "periodic_vmap":
+        qP_boundary = _build_boundary_state_from_periodic_vmap(q_elem=q_elem, cache=cache)
+        qP[is_boundary] = qP_boundary[is_boundary]
     else:
         qP_boundary = _build_boundary_state_from_opposite_boundary(q_elem=q_elem, cache=cache)
         qP[is_boundary] = qP_boundary[is_boundary]

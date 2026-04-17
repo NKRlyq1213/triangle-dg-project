@@ -158,7 +158,7 @@ def integrate_lsrk54(
         for _ in range(n_full):
             _lsrk54_step_inplace(rhs=rhs, t=t, q=q, dt=dt_nominal, res=res)
             t += dt_nominal
-            print(f"\rcurrent time = {t:.8f}", end="", flush=True)
+            # print(f"\rcurrent time = {t:.8f}", end="", flush=True)
             nsteps += 1
 
             if post_step_transform is not None:

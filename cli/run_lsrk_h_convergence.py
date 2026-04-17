@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 
 import numpy as np
 
@@ -40,6 +41,8 @@ def _output_stem(config: LSRKHConvergenceConfig, tf: float) -> str:
     return (
         f"lsrk_h_convergence_{_test_function_slug(config.test_function_mode)}_tf{_tf_label(tf)}_"
         f"table1_order{config.order}_N{config.N}_{config.diagonal}"
+        f"_{str(config.surface_inverse_mass_mode).strip().lower()}"
+        f"_{str(config.physical_boundary_mode).strip().lower()}"
         f"_taui{_tau_label(tau_interior)}"
         f"_tauqb{_tau_label(tau_qb)}"
     )
@@ -51,9 +54,9 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--preset",
-        choices=("quick", "full"),
+        choices=("quick", "full", "upstream-pbc"),
         default="quick",
-        help="quick: faster sanity run, full: complete run",
+        help="quick: faster sanity run, full: complete run, upstream-pbc: align with the upstream PBC notebook setup",
     )
     parser.add_argument(
         "--qb-correction",
@@ -85,9 +88,9 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--physical-boundary-mode",
-        choices=("exact_qb", "opposite_boundary"),
+        choices=("exact_qb", "opposite_boundary", "periodic_vmap"),
         default="exact_qb",
-        help="physical boundary exterior-state mode",
+        help="boundary exterior-state mode; periodic_vmap reproduces the upstream notebook's coordinate-matched periodic trace overwrite",
     )
     parser.add_argument(
         "--interior-trace-mode",
@@ -112,6 +115,26 @@ def _parse_args() -> argparse.Namespace:
         type=float,
         default=None,
         help="surface numerical flux parameter for physical-boundary-mode=exact_qb faces only",
+    )
+    parser.add_argument(
+        "--diagonal",
+        choices=("main", "anti"),
+        default=None,
+        help="override the preset triangle split orientation",
+    )
+    parser.add_argument(
+        "--mesh-levels",
+        type=int,
+        nargs="+",
+        default=None,
+        help="override the preset mesh subdivision list, for example: --mesh-levels 2 4 8 16 32",
+    )
+    parser.add_argument(
+        "--tf-values",
+        type=float,
+        nargs="+",
+        default=None,
+        help="override the preset final times, for example: --tf-values 10",
     )
     return parser.parse_args()
 
@@ -156,6 +179,28 @@ def _build_config(
     physical_boundary_mode: str,
     interior_trace_mode: str,
 ) -> LSRKHConvergenceConfig:
+    if preset == "upstream-pbc":
+        return LSRKHConvergenceConfig(
+            table_name="table1",
+            order=4,
+            N=4,
+            diagonal="anti",
+            mesh_levels=(1, 2, 4, 8, 16, 32, 64),
+            cfl=1.0,
+            tf_values=(1.0,),
+            tau=float(tau),
+            tau_interior=None if tau_interior is None else float(tau_interior),
+            tau_qb=None if tau_qb is None else float(tau_qb),
+            use_numba=True,
+            surface_inverse_mass_mode=surface_inverse_mass_mode,
+            surface_backend="face-major",
+            interior_trace_mode=interior_trace_mode,
+            test_function_mode=test_function_mode,
+            physical_boundary_mode=physical_boundary_mode,
+            use_surface_cache=True,
+            verbose=True,
+        )
+
     if preset == "quick":
         return LSRKHConvergenceConfig(
             table_name="table1",
@@ -164,7 +209,7 @@ def _build_config(
             diagonal="anti",
             mesh_levels=(1, 2, 4, 8, 16),
             cfl=1.0,
-            tf_values=(np.pi,),
+            tf_values=(20.0,),
             tau=float(tau),
             tau_interior=None if tau_interior is None else float(tau_interior),
             tau_qb=None if tau_qb is None else float(tau_qb),
@@ -185,7 +230,7 @@ def _build_config(
         diagonal="anti",
         mesh_levels=(1, 2, 4, 8, 16, 32),
         cfl=1.0,
-        tf_values=(np.pi,),
+        tf_values=(50.0,),
         tau=float(tau),
         tau_interior=None if tau_interior is None else float(tau_interior),
         tau_qb=None if tau_qb is None else float(tau_qb),
@@ -198,6 +243,34 @@ def _build_config(
         use_surface_cache=True,
         verbose=True,
     )
+
+
+def _apply_config_overrides(
+    config: LSRKHConvergenceConfig,
+    args: argparse.Namespace,
+) -> tuple[LSRKHConvergenceConfig, bool]:
+    overridden = False
+    out = config
+
+    if args.diagonal is not None:
+        out = replace(out, diagonal=str(args.diagonal).strip().lower())
+        overridden = True
+
+    if args.mesh_levels is not None:
+        mesh_levels = tuple(int(n) for n in args.mesh_levels)
+        if len(mesh_levels) == 0:
+            raise ValueError("--mesh-levels must provide at least one subdivision level.")
+        out = replace(out, mesh_levels=mesh_levels)
+        overridden = True
+
+    if args.tf_values is not None:
+        tf_values = tuple(float(tf) for tf in args.tf_values)
+        if len(tf_values) == 0:
+            raise ValueError("--tf-values must provide at least one final time.")
+        out = replace(out, tf_values=tf_values)
+        overridden = True
+
+    return out, overridden
 
 
 def _resolve_qb_mode(args: argparse.Namespace) -> str:
@@ -238,6 +311,7 @@ def main() -> None:
         physical_boundary_mode=args.physical_boundary_mode,
         interior_trace_mode=args.interior_trace_mode,
     )
+    config, has_overrides = _apply_config_overrides(config, args)
     tau_interior_eff, tau_qb_eff = resolve_effective_taus(
         tau=config.tau,
         tau_interior=config.tau_interior,
@@ -248,10 +322,15 @@ def main() -> None:
 
     test_function_label = _test_function_slug(config.test_function_mode)
     print(f"[run] preset={args.preset}")
+    if has_overrides:
+        print("[run] preset_overrides=on")
     print(f"[run] surface_inverse_mass_mode={config.surface_inverse_mass_mode}")
     print(f"[run] test_function_mode={config.test_function_mode}")
     print(f"[run] physical_boundary_mode={config.physical_boundary_mode}")
     print(f"[run] interior_trace_mode={config.interior_trace_mode}")
+    print(f"[run] diagonal={config.diagonal}")
+    print(f"[run] mesh_levels={config.mesh_levels}")
+    print(f"[run] tf_values={config.tf_values}")
     print(f"[run] tau={config.tau:g}")
     print(f"[run] tau_interior={tau_interior_eff:g}")
     print(f"[run] tau_qb={tau_qb_eff:g}")
