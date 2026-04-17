@@ -35,6 +35,49 @@ from time_integration.CFL import cfl_dt_from_h, mesh_min_altitude, vmax_from_uv
 from time_integration.lsrk54 import BLOWUP_BREAK_ABS, lsrk54_step
 
 
+def _mesh_min_edge_length(VX: np.ndarray, VY: np.ndarray, EToV: np.ndarray) -> float:
+    VX = np.asarray(VX, dtype=float).reshape(-1)
+    VY = np.asarray(VY, dtype=float).reshape(-1)
+    EToV = np.asarray(EToV, dtype=int)
+
+    if EToV.ndim != 2 or EToV.shape[1] != 3:
+        raise ValueError("EToV must have shape (K, 3).")
+
+    hmin = np.inf
+    for vids in EToV:
+        vertices = np.column_stack([VX[vids], VY[vids]])
+        e01 = float(np.linalg.norm(vertices[1] - vertices[0]))
+        e12 = float(np.linalg.norm(vertices[2] - vertices[1]))
+        e20 = float(np.linalg.norm(vertices[0] - vertices[2]))
+        hmin = min(hmin, e01, e12, e20)
+
+    return float(hmin)
+
+
+def _compute_dt_nominal(
+    *,
+    cfl: float,
+    h: float,
+    N: int,
+    vmax: float,
+    dt_cfl_mode: str,
+) -> float:
+    mode = str(dt_cfl_mode).strip().lower()
+    if mode == "n2":
+        return cfl_dt_from_h(cfl=cfl, h=h, N=N, vmax=vmax)
+    if mode == "nplus1-squared":
+        if cfl <= 0.0:
+            raise ValueError("cfl must be positive.")
+        if h <= 0.0:
+            raise ValueError("h must be positive.")
+        if N <= 0:
+            raise ValueError("N must be positive.")
+        if vmax <= 0.0:
+            raise ValueError("vmax must be positive.")
+        return float(cfl * h / (((N + 1) ** 2) * vmax))
+    raise ValueError("dt_cfl_mode must be one of: n2, nplus1-squared")
+
+
 def _tf_label(tf: float) -> str:
     if float(tf).is_integer():
         return str(int(tf))
@@ -62,6 +105,24 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--tf", type=float, default=1.0, help="final time")
     parser.add_argument("--cfl", type=float, default=1.0, help="CFL number")
     parser.add_argument(
+        "--diagonal",
+        choices=("anti", "main"),
+        default="anti",
+        help="structured mesh diagonal orientation",
+    )
+    parser.add_argument(
+        "--h-definition",
+        choices=("min-altitude", "min-edge"),
+        default="min-altitude",
+        help="element-size definition for CFL computation",
+    )
+    parser.add_argument(
+        "--dt-cfl-mode",
+        choices=("n2", "nplus1-squared"),
+        default="n2",
+        help="CFL denominator mode: n2 uses N^2, nplus1-squared uses (N+1)^2",
+    )
+    parser.add_argument(
         "--test-function",
         choices=("sin2pi_x", "sin2pi_y", "sin2pi_xy"),
         default="sin2pi_x",
@@ -69,9 +130,15 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--physical-boundary-mode",
-        choices=("exact_qb", "opposite_boundary"),
+        choices=("exact_qb", "opposite_boundary", "periodic_vmap"),
         default="exact_qb",
-        help="physical boundary exterior-state mode",
+        help="physical boundary exterior-state mode; periodic_vmap uses coordinate-matched periodic overwrite",
+    )
+    parser.add_argument(
+        "--face-order-mode",
+        choices=("triangle", "simplex", "simplex_strict"),
+        default="triangle",
+        help="surface face-index convention: triangle(default), simplex, or simplex_strict",
     )
     parser.add_argument(
         "--interior-trace-mode",
@@ -194,7 +261,7 @@ def _run_single_mesh(
     VX, VY, EToV = structured_square_tri_mesh(
         nx=mesh_level,
         ny=mesh_level,
-        diagonal="anti",
+        diagonal=str(args.diagonal),
     )
     conn = build_face_connectivity(VX, VY, EToV, classify_boundary="box")
 
@@ -213,17 +280,22 @@ def _run_single_mesh(
         geom=geom,
     )
     surface_cache = None
+    periodic_nodes = boundary_mode == "periodic_vmap"
     if (
         interior_trace_mode == "exchange"
         or interior_trace_mode == "exact_trace"
         or args.use_numba
         or boundary_mode == "opposite_boundary"
+        or periodic_nodes
     ):
         surface_cache = build_surface_exchange_cache(
             rule=rule,
             trace=trace,
             conn=conn,
             face_geom=face_geom,
+            face_order_mode=str(args.face_order_mode),
+            X_nodes=X if periodic_nodes else None,
+            Y_nodes=Y if periodic_nodes else None,
         )
 
     u_face, v_face = velocity(
@@ -241,9 +313,22 @@ def _run_single_mesh(
         dtype=float,
     )
 
-    hmin = mesh_min_altitude(VX, VY, EToV)
+    h_definition = str(args.h_definition).strip().lower()
+    if h_definition == "min-altitude":
+        hmin = mesh_min_altitude(VX, VY, EToV)
+    elif h_definition == "min-edge":
+        hmin = _mesh_min_edge_length(VX, VY, EToV)
+    else:
+        raise ValueError("h_definition must be one of: min-altitude, min-edge")
+
     vmax = vmax_from_uv(u_elem, v_elem)
-    dt_nominal = cfl_dt_from_h(cfl=float(args.cfl), h=hmin, N=4, vmax=vmax)
+    dt_nominal = _compute_dt_nominal(
+        cfl=float(args.cfl),
+        h=float(hmin),
+        N=4,
+        vmax=vmax,
+        dt_cfl_mode=str(args.dt_cfl_mode),
+    )
 
     q_boundary_correction = None
     q_boundary_correction_kind = "none"
@@ -290,8 +375,11 @@ def _run_single_mesh(
                 volume_split_cache=volume_split_cache,
                 surface_inverse_mass_T=surface_inverse_mass_t,
                 physical_boundary_mode=boundary_mode,
+                face_order_mode=str(args.face_order_mode),
                 q_boundary_correction=q_boundary_correction,
                 q_boundary_correction_mode=q_boundary_correction_mode,
+                X_nodes=X,
+                Y_nodes=Y,
             )
             return total_rhs
 
@@ -375,6 +463,7 @@ def _run_single_mesh(
         "tau_interior": float(tau_interior_eff),
         "tau_qb": float(tau_qb_eff),
         "q_boundary_correction_kind": q_boundary_correction_kind,
+        "hmin": float(hmin),
     }
 
 
@@ -399,12 +488,21 @@ def main() -> None:
     boundary_mode = str(args.physical_boundary_mode).strip().lower()
     interior_trace_mode = str(args.interior_trace_mode).strip().lower()
     surface_inverse_mass_mode = str(args.surface_inverse_mass_mode).strip().lower()
+    face_order_mode = str(args.face_order_mode).strip().lower()
     tau_interior_eff, tau_qb_eff = resolve_effective_taus(
         tau=float(args.tau),
         tau_interior=args.tau_interior,
         tau_qb=args.tau_qb,
     )
 
+    if interior_trace_mode != "exchange" and face_order_mode != "triangle":
+        raise ValueError(
+            "face-order-mode='simplex' and 'simplex_strict' currently support interior-trace-mode='exchange' only."
+        )
+    if face_order_mode == "simplex_strict" and surface_inverse_mass_mode != "projected":
+        raise ValueError(
+            "face-order-mode='simplex_strict' requires surface-inverse-mass-mode='projected'."
+        )
     if interior_trace_mode == "exact_trace" and surface_inverse_mass_mode != "diagonal":
         raise ValueError(
             "surface-inverse-mass-mode='projected' is not supported with interior-trace-mode='exact_trace'."
@@ -447,12 +545,18 @@ def main() -> None:
 
     if args.output is None:
         n_tag = "-".join(str(n) for n in mesh_levels)
+        h_tag = str(args.h_definition).replace("-", "")
+        dt_tag = str(args.dt_cfl_mode).replace("-", "")
         stem = (
             f"lsrk_error_vs_time_tf{_tf_label(args.tf)}"
             f"_n{n_tag}"
             f"_{args.test_function}"
             f"_{boundary_mode}"
             f"_{surface_inverse_mass_mode}"
+            f"_{args.diagonal}"
+            f"_face{face_order_mode}"
+            f"_h{h_tag}"
+            f"_dt{dt_tag}"
             f"_taui{_tau_label(tau_interior_eff)}"
             f"_tauqb{_tau_label(tau_qb_eff)}"
             f"_qb{str(args.qb_correction).strip().lower()}"
@@ -501,6 +605,7 @@ def main() -> None:
             "[run]"
             f" n={int(curve['mesh_level'])}"
             f" nsteps={int(curve['nsteps'])}"
+            f" hmin={float(curve['hmin']):.6e}"
             f" dt_nominal={float(curve['dt_nominal']):.6e}"
             f" reached_tf={bool(curve['reached_tf'])}"
             f" tf_used={float(curve['tf_used']):.12f}"
@@ -512,6 +617,10 @@ def main() -> None:
         f" interior_trace_mode={interior_trace_mode}"
     )
     print(f"[run] surface_inverse_mass_mode={surface_inverse_mass_mode}")
+    print(f"[run] face_order_mode={face_order_mode}")
+    print(f"[run] diagonal={args.diagonal}")
+    print(f"[run] h_definition={args.h_definition}")
+    print(f"[run] dt_cfl_mode={args.dt_cfl_mode}")
     print(f"[run] tau={args.tau:g}")
     print(f"[run] tau_interior={tau_interior_eff:g}")
     print(f"[run] tau_qb={tau_qb_eff:g}")

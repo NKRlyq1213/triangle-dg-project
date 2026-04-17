@@ -181,12 +181,14 @@ but `cli.*` is the canonical entry point going forward.
 
 `cli.run_lsrk_h_convergence` visible parameters:
 
-- `--preset {quick,full}` (default `quick`)
-- `--qb-correction {off,on,compare}` (default `off`)
+- `--preset {quick,full,upstream-pbc}` (effective default `quick`)
+- `--qb-correction {off,on,compare}` (effective default `off`)
 - `--surface-inverse-mass-mode {diagonal,projected}`
 - `--test-function {sin2pi_x,sin2pi_y,sin2pi_xy}`
-- `--physical-boundary-mode {exact_qb,opposite_boundary}`
+- `--physical-boundary-mode {exact_qb,opposite_boundary,periodic_vmap}`
 - `--interior-trace-mode {exchange,exact_trace}`
+- `--face-order-mode {triangle,simplex,simplex_strict}`
+- `--diagonal {main,anti}`, `--mesh-levels ...`, `--tf-values ...` override preset mesh/time settings
 - `--tau FLOAT` sets the shared default for both tau roles
 - `--tau-interior FLOAT` overrides the penalty tau on interior faces and non-`exact_qb` exterior traces
 - `--tau-qb FLOAT` overrides the penalty tau on `physical-boundary-mode=exact_qb` faces only
@@ -195,8 +197,12 @@ but `cli.*` is the canonical entry point going forward.
 
 - `--mesh-level INT` or `--mesh-levels INT [INT ...]`
 - `--tf FLOAT`, `--cfl FLOAT`
+- `--diagonal {anti,main}`
+- `--h-definition {min-altitude,min-edge}`
+- `--dt-cfl-mode {n2,nplus1-squared}`
 - `--test-function {sin2pi_x,sin2pi_y,sin2pi_xy}`
-- `--physical-boundary-mode {exact_qb,opposite_boundary}`
+- `--physical-boundary-mode {exact_qb,opposite_boundary,periodic_vmap}`
+- `--face-order-mode {triangle,simplex,simplex_strict}`
 - `--interior-trace-mode {exchange,exact_trace}`
 - `--qb-correction {off,on}`
 - `--surface-inverse-mass-mode {diagonal,projected}`
@@ -207,12 +213,14 @@ but `cli.*` is the canonical entry point going forward.
 
 Current constraints:
 
+- `face-order-mode=simplex` and `simplex_strict` currently support `interior-trace-mode=exchange` only
+- `face-order-mode=simplex_strict` requires `surface-inverse-mass-mode=projected`
 - `interior-trace-mode=exact_trace` does not support `surface-inverse-mass-mode=projected`
 - `qb-correction` requires at least one exact source: `interior-trace-mode=exact_trace` or `physical-boundary-mode=exact_qb`
 
 `tau=0` is still pure upwind. If `--tau-interior` or `--tau-qb` is omitted, it falls back to the shared `--tau` value.
 
-LSRK 指令常用參數與限制如上，完整細節可參考 [docs/experiments.md](docs/experiments.md)。
+LSRK 指令常用參數與限制如上；完整決策流程、情境範例與輸出命名請見 [docs/experiments.md](docs/experiments.md)。
 
 ## Outputs / 輸出
 

@@ -61,6 +61,7 @@ class LSRKHConvergenceConfig:
     interior_trace_mode: str = "exchange"
     test_function_mode: str = "sin2pi_x"
     physical_boundary_mode: str = "exact_qb"
+    face_order_mode: str = "triangle"
     use_surface_cache: bool = True
     use_rk_stage_boundary_correction: bool = False
     q_boundary_correction: Callable | None = None
@@ -461,6 +462,17 @@ def _validate_config(config: LSRKHConvergenceConfig) -> None:
         raise ValueError(
             "physical_boundary_mode must be one of: 'exact_qb', 'opposite_boundary', 'periodic_vmap'."
         )
+    face_order_mode = str(config.face_order_mode).strip().lower()
+    if face_order_mode not in ("triangle", "simplex", "simplex_strict"):
+        raise ValueError("face_order_mode must be one of: 'triangle', 'simplex', 'simplex_strict'.")
+    if interior_trace_mode != "exchange" and face_order_mode != "triangle":
+        raise ValueError(
+            "face_order_mode='simplex' and 'simplex_strict' currently support interior_trace_mode='exchange' only."
+        )
+    if face_order_mode == "simplex_strict" and surface_inverse_mass_mode != "projected":
+        raise ValueError(
+            "face_order_mode='simplex_strict' requires surface_inverse_mass_mode='projected'."
+        )
     if interior_trace_mode == "exact_trace" and surface_inverse_mass_mode != "diagonal":
         raise ValueError(
             "surface_inverse_mass_mode='projected' is not supported with interior_trace_mode='exact_trace'."
@@ -488,6 +500,7 @@ def _prepare_study_context(config: LSRKHConvergenceConfig) -> dict:
     surface_inverse_mass_mode = str(config.surface_inverse_mass_mode).strip().lower()
     interior_trace_mode = str(config.interior_trace_mode).strip().lower()
     physical_boundary_mode = str(config.physical_boundary_mode).strip().lower()
+    face_order_mode = str(config.face_order_mode).strip().lower()
     q_boundary_correction_mode = str(config.q_boundary_correction_mode).strip().lower()
     tau_interior_eff, tau_qb_eff = resolve_effective_taus(
         tau=config.tau,
@@ -512,6 +525,7 @@ def _prepare_study_context(config: LSRKHConvergenceConfig) -> dict:
         "surface_inverse_mass_mode": surface_inverse_mass_mode,
         "interior_trace_mode": interior_trace_mode,
         "physical_boundary_mode": physical_boundary_mode,
+        "face_order_mode": face_order_mode,
         "q_boundary_correction_mode": q_boundary_correction_mode,
         "tau_interior": float(tau_interior_eff),
         "tau_qb": float(tau_qb_eff),
@@ -535,6 +549,8 @@ def _prepare_level_state(
     trace = context["trace"]
     velocity = context["velocity"]
     interior_trace_mode = context["interior_trace_mode"]
+    physical_boundary_mode = context["physical_boundary_mode"]
+    face_order_mode = context["face_order_mode"]
 
     VX, VY, EToV = structured_square_tri_mesh(
         nx=n,
@@ -561,13 +577,15 @@ def _prepare_level_state(
 
     surface_cache = None
     if config.use_surface_cache or interior_trace_mode == "exact_trace":
+        periodic_nodes = physical_boundary_mode == "periodic_vmap"
         surface_cache = build_surface_exchange_cache(
             rule=rule,
             trace=trace,
             conn=conn,
             face_geom=face_geom,
-            X_nodes=X,
-            Y_nodes=Y,
+            face_order_mode=face_order_mode,
+            X_nodes=X if periodic_nodes else None,
+            Y_nodes=Y if periodic_nodes else None,
         )
 
     u_face, v_face = velocity(
@@ -684,6 +702,7 @@ def _build_rhs_function(
                 volume_split_cache=level_state["volume_split_cache"],
                 surface_inverse_mass_T=context["surface_inverse_mass_t"],
                 physical_boundary_mode=context["physical_boundary_mode"],
+                face_order_mode=context["face_order_mode"],
                 q_boundary_correction=q_boundary_correction,
                 q_boundary_correction_mode=context["q_boundary_correction_mode"],
                 X_nodes=level_state["X"],
@@ -806,6 +825,7 @@ def _run_lsrk_h_convergence_for_tf(
             "interior_trace_mode": context["interior_trace_mode"],
             "test_function_mode": context["test_function_spec"].mode,
             "physical_boundary_mode": context["physical_boundary_mode"],
+            "face_order_mode": context["face_order_mode"],
             "q_boundary_correction_kind": q_boundary_correction_kind,
             "q_boundary_correction_mode": context["q_boundary_correction_mode"],
         }
@@ -817,7 +837,6 @@ def _run_lsrk_h_convergence_for_tf(
             linf_display = Linf_error if reached_tf else Linf_error_at_stop
             print(
                 f"[lsrk h-study] tf={tf:>5.1f} | n={int(level_state['n']):>3d} | K={K:>7d} | "
-                f"status={status:>12s} | "
                 f"L2={l2_display:.6e} | Linf={linf_display:.6e} | "
                 f"steps={nsteps:>7d} | dt={float(level_state['dt_nominal']):.3e} | time={elapsed:.2f}s"
             )
@@ -928,7 +947,6 @@ def print_results_table(results: list[dict], title: str | None = None) -> None:
 
     header = (
         f"{'n':>6s} {'K':>9s} {'h':>12s} "
-        f"{'status':>14s} "
         f"{'dt':>12s} {'steps':>8s} "
         f"{'L2_error':>14s} {'rate':>8s} "
         f"{'Linf_error':>14s} {'rate':>8s} "
@@ -938,13 +956,12 @@ def print_results_table(results: list[dict], title: str | None = None) -> None:
     print("-" * len(header))
 
     def fmt_rate(v: float) -> str:
-        return "   -   " if not np.isfinite(v) else f"{v:8.3f}"
+        return "   -   "+ " " if not np.isfinite(v) else f"{v:8.3f}"
 
     for r in results:
         status = "ok" if bool(r.get("reached_tf", True)) else "stopped_early"
         print(
             f"{r['nx']:6d} {r['K_tri']:9d} {r['h']:12.4e} "
-            f"{status:14s} "
             f"{r['dt_nominal']:12.4e} {r['nsteps']:8d} "
             f"{r['L2_error']:14.6e} {fmt_rate(r['rate_L2'])} "
             f"{r['Linf_error']:14.6e} {fmt_rate(r['rate_Linf'])} "
