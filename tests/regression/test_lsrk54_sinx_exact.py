@@ -352,6 +352,25 @@ def test_lsrk54_sinx_reference():
         f"Penultimate L2 rate too low: {result['l2_rates'][-2]}"
 
 
+def test_lsrk54_sinx_reference_unaligned_tf():
+    """
+    Regression guard for final short-step behavior when tf is not aligned to dt.
+    """
+    result = run_lsrk54_sinx_study(
+        compare_mode="reference",
+        tf=2.0 * np.pi,
+        cfl_list=[1.00, 0.50, 0.25],
+        reference_cfl_factor=4.0,
+    )
+    print_study_results(result)
+
+    # Should remain close to 4th-order despite a non-aligned final time.
+    assert result["max_rates"][-1] > 3.6, \
+        f"Final max-norm rate too low (unaligned tf): {result['max_rates'][-1]}"
+    assert result["l2_rates"][-1] > 3.6, \
+        f"Final L2 rate too low (unaligned tf): {result['l2_rates'][-1]}"
+
+
 if __name__ == "__main__":
     print("=" * 72)
     test_lsrk54_sinx_reference()

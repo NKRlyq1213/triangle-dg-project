@@ -32,6 +32,16 @@ RK4C = np.array([
 ], dtype=float)
 
 
+def tf_align_tolerance(tf: float, t0: float = 0.0) -> float:
+    scale = max(1.0, abs(float(tf)), abs(float(t0)))
+    return 1e-15 * scale
+
+
+def is_tf_reached(t: float, tf: float, *, tol: float | None = None) -> bool:
+    tol_eff = tf_align_tolerance(tf, t) if tol is None else float(tol)
+    return abs(float(tf) - float(t)) <= tol_eff
+
+
 def _lsrk54_step_inplace(rhs, t: float, q: np.ndarray, dt: float, res: np.ndarray) -> None:
     """
     In-place 5-stage LSRK54 update on q using reusable residual buffer.
@@ -136,10 +146,12 @@ def integrate_lsrk54(
         raise ValueError("Provide exactly one of dt or dt_getter.")
 
     t = float(t0)
+    tf_target = float(tf)
+    tol = tf_align_tolerance(tf_target, t0)
     nsteps = 0
 
-    if np.isclose(tf, t0, atol=1e-15, rtol=1e-15):
-        return q, t, nsteps
+    if is_tf_reached(t, tf_target, tol=tol):
+        return q, tf_target, nsteps
 
     res = np.zeros_like(q)
 
@@ -148,16 +160,19 @@ def integrate_lsrk54(
         if dt_nominal <= 0.0:
             raise ValueError("Time step must be positive.")
 
-        tol = 1e-15 * max(1.0, abs(tf))
-        remaining = tf - t
-        n_full = int(remaining / dt_nominal)
+        remaining = tf_target - t
+        n_full = max(0, int(np.floor(remaining / dt_nominal)))
+        while n_full > 0 and (t + n_full * dt_nominal) > (tf_target + tol):
+            n_full -= 1
 
         if nsteps + n_full > max_steps:
             raise RuntimeError("Maximum number of steps exceeded in integrate_lsrk54.")
 
-        for _ in range(n_full):
-            _lsrk54_step_inplace(rhs=rhs, t=t, q=q, dt=dt_nominal, res=res)
-            t += dt_nominal
+        t_base = t
+        for i in range(n_full):
+            t_step_start = t_base + i * dt_nominal
+            _lsrk54_step_inplace(rhs=rhs, t=t_step_start, q=q, dt=dt_nominal, res=res)
+            t = t_base + (i + 1) * dt_nominal
             # print(f"\rcurrent time = {t:.8f}", end="", flush=True)
             nsteps += 1
 
@@ -169,13 +184,17 @@ def integrate_lsrk54(
             if np.max(np.abs(q)) > BLOWUP_BREAK_ABS:
                 return q, t, nsteps
 
-        if (tf - t) > tol:
+        remaining = tf_target - t
+        if remaining < -tol:
+            raise RuntimeError("Internal stepping overshot tf beyond tolerance.")
+
+        if remaining > tol:
             if nsteps >= max_steps:
                 raise RuntimeError("Maximum number of steps exceeded in integrate_lsrk54.")
-            
-            dt_step = tf - t
+
+            dt_step = remaining
             _lsrk54_step_inplace(rhs=rhs, t=t, q=q, dt=dt_step, res=res)
-            t += dt_step
+            t = tf_target
             nsteps += 1
 
             if post_step_transform is not None:
@@ -186,12 +205,12 @@ def integrate_lsrk54(
             if np.max(np.abs(q)) > BLOWUP_BREAK_ABS:
                 return q, t, nsteps
 
-        if abs(tf - t) <= tol:
-            t = float(tf)
+        if is_tf_reached(t, tf_target, tol=tol):
+            t = tf_target
 
         return q, t, nsteps
 
-    while t < tf:
+    while not is_tf_reached(t, tf_target, tol=tol):
         if nsteps >= max_steps:
             raise RuntimeError("Maximum number of steps exceeded in integrate_lsrk54.")
 
@@ -200,7 +219,14 @@ def integrate_lsrk54(
         if dt_nominal <= 0.0:
             raise ValueError("Time step must be positive.")
 
-        dt_step = min(dt_nominal, tf - t)
+        remaining = tf_target - t
+        if remaining <= tol:
+            t = tf_target
+            break
+
+        dt_step = min(dt_nominal, remaining)
+        if dt_step <= 0.0:
+            raise RuntimeError("Non-positive dt_step encountered before reaching tf.")
 
         _lsrk54_step_inplace(rhs=rhs, t=t, q=q, dt=dt_step, res=res)
         t += dt_step
@@ -215,7 +241,8 @@ def integrate_lsrk54(
             break
 
         # protect against roundoff stalling very near tf
-        if abs(tf - t) <= 1e-15 * max(1.0, abs(tf)):
-            t = float(tf)
+        if is_tf_reached(t, tf_target, tol=tol):
+            t = tf_target
+            break
 
     return q, t, nsteps
