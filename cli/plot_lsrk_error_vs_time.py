@@ -15,6 +15,7 @@ from experiments.lsrk_h_convergence import (
     build_projected_inverse_mass_from_rule,
     build_reference_diff_operators_from_rule,
     build_rk_stage_boundary_correction,
+    compute_convergence_rate,
     resolve_effective_taus,
     weighted_l2_error,
 )
@@ -32,7 +33,7 @@ from operators.rhs_split_conservative_exchange import (
 from operators.rhs_split_conservative_exact_trace import rhs_split_conservative_exact_trace
 from operators.trace_policy import build_trace_policy
 from time_integration.CFL import cfl_dt_from_h, mesh_min_altitude, vmax_from_uv
-from time_integration.lsrk54 import BLOWUP_BREAK_ABS, lsrk54_step
+from time_integration.lsrk54 import integrate_lsrk54, is_tf_reached
 
 
 def _mesh_min_edge_length(VX: np.ndarray, VY: np.ndarray, EToV: np.ndarray) -> float:
@@ -223,6 +224,130 @@ def _save_csv_multi(path: Path, curves: list[dict]) -> None:
                 writer.writerow([mesh_level, tau_interior, tau_qb, times[i], l2[i], linf[i], qmax[i]])
 
 
+def _build_convergence_summary(curves: list[dict]) -> tuple[list[dict], str]:
+    rows: list[dict] = []
+    for curve in curves:
+        mesh_level = int(curve["mesh_level"])
+        if mesh_level <= 0:
+            raise ValueError("mesh_level must be positive.")
+
+        l2 = np.asarray(curve["l2"], dtype=float)
+        linf = np.asarray(curve["linf"], dtype=float)
+        if l2.size == 0 or linf.size == 0:
+            raise ValueError("curve errors must be non-empty.")
+
+        rows.append(
+            {
+                "mesh_level": mesh_level,
+                "h": 1.0 / float(mesh_level),
+                "reached_tf": bool(curve["reached_tf"]),
+                "tf_used": float(curve["tf_used"]),
+                "tau_interior": float(curve["tau_interior"]),
+                "tau_qb": float(curve["tau_qb"]),
+                "L2_error_final": float(l2[-1]),
+                "Linf_error_final": float(linf[-1]),
+                "rate_L2": float("nan"),
+                "rate_Linf": float("nan"),
+            }
+        )
+
+    rows.sort(key=lambda row: int(row["mesh_level"]))
+
+    if len(rows) < 2:
+        return rows, "insufficient_mesh_levels"
+
+    if not all(bool(row["reached_tf"]) for row in rows):
+        return rows, "strict_final_time_not_met"
+
+    l2_errors = [float(row["L2_error_final"]) for row in rows]
+    linf_errors = [float(row["Linf_error_final"]) for row in rows]
+    h_values = [float(row["h"]) for row in rows]
+    l2_rates = compute_convergence_rate(l2_errors, h_values)
+    linf_rates = compute_convergence_rate(linf_errors, h_values)
+
+    for i, row in enumerate(rows):
+        row["rate_L2"] = float(l2_rates[i])
+        row["rate_Linf"] = float(linf_rates[i])
+
+    return rows, "ok"
+
+
+def _save_csv_convergence_summary(path: Path, rows: list[dict], *, rate_status: str) -> None:
+    with path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(
+            [
+                "mesh_level",
+                "h",
+                "reached_tf",
+                "tf_used",
+                "tau_interior",
+                "tau_qb",
+                "L2_error_final",
+                "rate_L2",
+                "Linf_error_final",
+                "rate_Linf",
+                "rate_status",
+            ]
+        )
+        for row in rows:
+            writer.writerow(
+                [
+                    int(row["mesh_level"]),
+                    float(row["h"]),
+                    bool(row["reached_tf"]),
+                    float(row["tf_used"]),
+                    float(row["tau_interior"]),
+                    float(row["tau_qb"]),
+                    float(row["L2_error_final"]),
+                    float(row["rate_L2"]),
+                    float(row["Linf_error_final"]),
+                    float(row["rate_Linf"]),
+                    str(rate_status),
+                ]
+            )
+
+
+def _fmt_rate(v: float) -> str:
+    return "   -   " if not np.isfinite(float(v)) else f"{float(v):7.3f}"
+
+
+def _print_convergence_summary(rows: list[dict], *, rate_status: str) -> None:
+    print("[convergence] final-time spatial order, h=1/n, strict_final_time=True")
+    if rate_status != "ok":
+        print(f"[convergence] status={rate_status}; rates are unavailable.")
+
+    header = (
+        f"{'n':>6s} {'h':>12s} {'reached_tf':>11s} {'tf_used':>14s} "
+        f"{'L2_final':>14s} {'p_L2':>8s} {'Linf_final':>14s} {'p_Linf':>8s}"
+    )
+    print(header)
+    print("-" * len(header))
+
+    for row in rows:
+        print(
+            f"{int(row['mesh_level']):6d} {float(row['h']):12.4e} {str(bool(row['reached_tf'])):>11s} "
+            f"{float(row['tf_used']):14.6f} {float(row['L2_error_final']):14.6e} {_fmt_rate(float(row['rate_L2'])):>8s} "
+            f"{float(row['Linf_error_final']):14.6e} {_fmt_rate(float(row['rate_Linf'])):>8s}"
+        )
+
+
+def _build_convergence_annotation_text(rows: list[dict], *, rate_status: str) -> str:
+    if rate_status != "ok":
+        return f"p (final-time) unavailable\nstatus={rate_status}"
+
+    l2_rates = [float(row["rate_L2"]) for row in rows if np.isfinite(float(row["rate_L2"]))]
+    linf_rates = [float(row["rate_Linf"]) for row in rows if np.isfinite(float(row["rate_Linf"]))]
+    if len(l2_rates) == 0 or len(linf_rates) == 0:
+        return "p (final-time) unavailable\nstatus=rate_not_finite"
+
+    return (
+        "final-time spatial order\n"
+        f"p_L2(last)={l2_rates[-1]:.3f}, p_L2(avg)={float(np.mean(l2_rates)):.3f}\n"
+        f"p_Linf(last)={linf_rates[-1]:.3f}, p_Linf(avg)={float(np.mean(linf_rates)):.3f}"
+    )
+
+
 def _resolve_mesh_levels(args: argparse.Namespace) -> list[int]:
     if args.mesh_levels is None or len(args.mesh_levels) == 0:
         mesh_levels = [int(args.mesh_level)]
@@ -406,6 +531,7 @@ def _run_single_mesh(
             physical_boundary_mode=boundary_mode,
             q_boundary_correction=q_boundary_correction,
             q_boundary_correction_mode=q_boundary_correction_mode,
+            surface_inverse_mass_T=surface_inverse_mass_t,
             use_numba=args.use_numba,
             conn=conn,
             surface_cache=surface_cache,
@@ -413,33 +539,33 @@ def _run_single_mesh(
         return total_rhs
 
     q = np.array(q0, copy=True)
-    t = 0.0
-    nsteps = 0
+    t0 = 0.0
 
-    times = [t]
-    err0 = q - q_exact(X, Y, t=t)
+    times = [t0]
+    err0 = q - q_exact(X, Y, t=t0)
     l2_errors = [weighted_l2_error(err0, rule, face_geom)]
     linf_errors = [float(np.max(np.abs(err0)))]
     max_abs_q = [float(np.max(np.abs(q)))]
 
-    tol = 1e-15 * max(1.0, abs(float(args.tf)))
-    while t < float(args.tf) - tol:
-        dt_step = min(dt_nominal, float(args.tf) - t)
-        q = lsrk54_step(rhs, t=t, q=q, dt=dt_step)
-        t += dt_step
-        nsteps += 1
-
-        q_ref = q_exact(X, Y, t=t)
-        err = q - q_ref
-        times.append(float(t))
+    def _record_step(t_step: float, q_step: np.ndarray) -> np.ndarray:
+        q_ref = q_exact(X, Y, t=t_step)
+        err = q_step - q_ref
+        times.append(float(t_step))
         l2_errors.append(weighted_l2_error(err, rule, face_geom))
         linf_errors.append(float(np.max(np.abs(err))))
-        max_abs_q.append(float(np.max(np.abs(q))))
+        max_abs_q.append(float(np.max(np.abs(q_step))))
+        return q_step
 
-        if max_abs_q[-1] > BLOWUP_BREAK_ABS:
-            break
+    _qf, tf_used, nsteps = integrate_lsrk54(
+        rhs=rhs,
+        q0=q,
+        t0=t0,
+        tf=float(args.tf),
+        dt=dt_nominal,
+        post_step_transform=_record_step,
+    )
 
-    reached_tf = bool(np.isclose(t, float(args.tf), atol=1e-12, rtol=1e-12))
+    reached_tf = bool(is_tf_reached(tf_used, float(args.tf)))
 
     times_arr = np.asarray(times, dtype=float)
     l2_arr = np.asarray(l2_errors, dtype=float)
@@ -459,7 +585,7 @@ def _run_single_mesh(
         "nsteps": nsteps,
         "dt_nominal": dt_nominal,
         "reached_tf": reached_tf,
-        "tf_used": float(t),
+        "tf_used": float(tf_used),
         "tau_interior": float(tau_interior_eff),
         "tau_qb": float(tau_qb_eff),
         "q_boundary_correction_kind": q_boundary_correction_kind,
@@ -503,10 +629,6 @@ def main() -> None:
         raise ValueError(
             "face-order-mode='simplex_strict' requires surface-inverse-mass-mode='projected'."
         )
-    if interior_trace_mode == "exact_trace" and surface_inverse_mass_mode != "diagonal":
-        raise ValueError(
-            "surface-inverse-mass-mode='projected' is not supported with interior-trace-mode='exact_trace'."
-        )
     exact_source_exists = (interior_trace_mode == "exact_trace") or (boundary_mode == "exact_qb")
     if args.qb_correction == "on" and (not exact_source_exists):
         raise ValueError(
@@ -540,6 +662,8 @@ def main() -> None:
         )
         curves.append(curve)
 
+    conv_rows, conv_rate_status = _build_convergence_summary(curves)
+
     root = project_root(__file__)
     out_dir = experiments_output_dir(__file__, "lsrk_error_vs_time")
 
@@ -570,6 +694,7 @@ def main() -> None:
             fig_path = root / fig_path
     fig_path.parent.mkdir(parents=True, exist_ok=True)
     csv_path = fig_path.with_suffix(".csv")
+    conv_csv_path = fig_path.with_name(f"{fig_path.stem}_convergence_summary.csv")
 
     fig, ax = plt.subplots(figsize=(8.5, 5.2))
 
@@ -592,6 +717,16 @@ def main() -> None:
         f" | tf={args.tf:g}, n={mesh_label}, tau_i={tau_interior_eff:g}, tau_qb={tau_qb_eff:g},"
         f" trace={interior_trace_mode}, reached_all={reached_all}"
     )
+    ax.text(
+        0.02,
+        0.03,
+        _build_convergence_annotation_text(conv_rows, rate_status=conv_rate_status),
+        transform=ax.transAxes,
+        ha="left",
+        va="bottom",
+        fontsize=8.5,
+        bbox={"boxstyle": "round,pad=0.35", "facecolor": "white", "edgecolor": "0.5", "alpha": 0.85},
+    )
     ax.grid(True, which="both", linestyle=":", linewidth=0.8)
     ax.legend()
     fig.tight_layout()
@@ -599,6 +734,8 @@ def main() -> None:
     plt.close(fig)
 
     _save_csv_multi(csv_path, curves)
+    _save_csv_convergence_summary(conv_csv_path, conv_rows, rate_status=conv_rate_status)
+    _print_convergence_summary(conv_rows, rate_status=conv_rate_status)
 
     for curve in curves:
         print(
@@ -629,6 +766,7 @@ def main() -> None:
     print(f"[run] qb_correction_kind={qb_modes}")
     print(f"[OK] wrote {fig_path}")
     print(f"[OK] wrote {csv_path}")
+    print(f"[OK] wrote {conv_csv_path}")
 
 
 if __name__ == "__main__":

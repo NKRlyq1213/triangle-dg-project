@@ -87,6 +87,8 @@ python -m cli.run_lsrk_h_convergence
   Default: unset; if set, overrides preset final times
 - `--use-numba` / `--no-use-numba`
   Default: enabled (`--use-numba`)
+- `--time-cli`
+  Default: disabled; when enabled, emits tf-scan terminal summary + merged CSV + summary CSV + PNG
 
 Hidden compatibility flags (legacy, not recommended for new runs):
 
@@ -114,6 +116,12 @@ Hidden compatibility flags (legacy, not recommended for new runs):
   - `off`: baseline only
   - `on`: corrected only (`rk-stage exact-source correction`)
   - `compare`: baseline and corrected are both run and exported
+- `time-cli` behavior (`--time-cli`):
+  - keeps existing per-tf tables and per-tf CSV outputs unchanged
+  - adds a tf-scan terminal summary (one row per tf)
+  - adds merged raw CSV across all tf values with `tf_scan` column
+  - adds tf-scan summary CSV (`reached_tf_all`, finest-level errors, last/avg rates, elapsed time, `rate_status`)
+  - adds tf-scan PNG (rate-vs-tf and finest-error-vs-tf)
 
 ## LSRK Error-vs-Time CLI / LSRK 誤差-時間 CLI
 
@@ -175,8 +183,13 @@ Hidden internal flags:
   - `--h-definition=min-altitude|min-edge` controls which element size is used for `h`
   - `--dt-cfl-mode=n2|nplus1-squared` controls denominator scaling (`N^2` vs `(N+1)^2`)
 - Output path:
-  - no `--output`: auto-generate `.png` and matching `.csv` in canonical output dir
+  - no `--output`: auto-generate `.png`, matching time-history `.csv`, and `<stem>_convergence_summary.csv` in canonical output dir
   - relative `--output`: resolved from project root
+
+- Final-time convergence summary:
+  - the CLI computes spatial order across mesh levels with `h=1/n`
+  - strict final-time policy: rates are only valid when every mesh reaches target `tf`
+  - if any mesh stops early, `rate_L2` / `rate_Linf` are written as `NaN` and marked unavailable in terminal/plot annotations
 
 ## Compatibility Matrix / 相容性矩陣
 
@@ -187,8 +200,11 @@ The following are enforced by runtime checks:
 | `interior-trace-mode=exact_trace` + `face-order-mode=simplex` | Invalid | `simplex` currently supports `exchange` only |
 | `interior-trace-mode=exact_trace` + `face-order-mode=simplex_strict` | Invalid | `simplex_strict` currently supports `exchange` only |
 | `face-order-mode=simplex_strict` + `surface-inverse-mass-mode=diagonal` | Invalid | `simplex_strict` requires `projected` |
-| `interior-trace-mode=exact_trace` + `surface-inverse-mass-mode=projected` | Invalid | projected lifting not supported with exact interior trace |
 | `qb-correction=on/compare` + no exact source | Invalid | requires `interior-trace-mode=exact_trace` or `physical-boundary-mode=exact_qb` |
+
+Supported combination:
+
+- `interior-trace-mode=exact_trace` works with both `surface-inverse-mass-mode=diagonal` and `projected`.
 
 ## Scenario-Driven Examples / 情境導向範例
 
@@ -228,7 +244,19 @@ python -m cli.run_lsrk_h_convergence --preset quick --face-order-mode simplex_st
 python -m cli.run_lsrk_h_convergence --preset quick --physical-boundary-mode exact_qb --qb-correction compare
 ```
 
-### 7) Multi-mesh error-vs-time overlay / 多網格誤差隨時間曲線
+### 7) `exact_trace + projected` / exact-trace 搭配 projected lifting
+
+```bash
+python -m cli.run_lsrk_h_convergence --preset quick --interior-trace-mode exact_trace --surface-inverse-mass-mode projected
+```
+
+### 8) Time CLI summary outputs / 時間掃描輸出
+
+```bash
+python -m cli.run_lsrk_h_convergence --preset quick --mesh-levels 2 4 8 --tf-values 0.1 0.2 0.5 --time-cli
+```
+
+### 9) Multi-mesh error-vs-time overlay / 多網格誤差隨時間曲線
 
 ```bash
 python -m cli.plot_lsrk_error_vs_time --mesh-levels 8 16 32 --tf 1.0 --test-function sin2pi_xy --physical-boundary-mode periodic_vmap --face-order-mode simplex
@@ -267,6 +295,18 @@ Suffix rules:
 - `qb-correction=compare`: `_baseline.csv` and `_rkstage_qb.csv`
 - `interior-trace-mode!=exchange`: append `_{interior_trace_mode}`
 - `preset!=full`: append `_{preset}`
+
+Additional `--time-cli` stems (same output directory):
+
+- merged raw rows: `lsrk_h_conv_time_cli_{...}_{variant}.csv`
+- tf-scan summary: `lsrk_h_conv_time_cli_{...}_{variant}_summary.csv`
+- tf-scan figure: `lsrk_h_conv_time_cli_{...}_{variant}.png`
+
+where `variant` is one of:
+
+- `baseline`
+- `rkstage_qb` (compare mode corrected branch)
+- `rkstage_qb_only` (qb-correction=on)
 
 ### LSRK error-vs-time outputs
 

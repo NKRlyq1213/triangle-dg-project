@@ -32,7 +32,7 @@ from operators.rhs_split_conservative_exchange import (
 )
 from operators.rhs_split_conservative_exact_trace import rhs_split_conservative_exact_trace
 
-from time_integration.lsrk54 import integrate_lsrk54
+from time_integration.lsrk54 import integrate_lsrk54, is_tf_reached
 from time_integration.lsrk54 import RK4A, RK4B, RK4C
 from time_integration.CFL import mesh_min_altitude, cfl_dt_from_h, vmax_from_uv
 
@@ -407,17 +407,28 @@ def weighted_l2_error(err: np.ndarray, rule: dict, face_geom: dict) -> float:
     return float(np.sqrt(val))
 
 
-def compute_convergence_rate(errors: list[float]) -> list[float]:
+def compute_convergence_rate(errors: list[float], h_values: list[float]) -> list[float]:
+    if len(errors) != len(h_values):
+        raise ValueError("errors and h_values must have the same length.")
+
     rates = [math.nan]
     for i in range(1, len(errors)):
         e_prev = float(errors[i - 1])
         e_curr = float(errors[i])
+        h_prev = float(h_values[i - 1])
+        h_curr = float(h_values[i])
         if (not np.isfinite(e_prev)) or (not np.isfinite(e_curr)):
+            rates.append(math.nan)
+        elif (not np.isfinite(h_prev)) or (not np.isfinite(h_curr)):
             rates.append(math.nan)
         elif e_prev <= 0.0 or e_curr <= 0.0:
             rates.append(math.nan)
+        elif h_prev <= 0.0 or h_curr <= 0.0:
+            rates.append(math.nan)
+        elif h_prev == h_curr:
+            rates.append(math.nan)
         else:
-            rates.append(math.log(e_prev / e_curr, 2.0))
+            rates.append(math.log(e_prev / e_curr) / math.log(h_prev / h_curr))
     return rates
 
 
@@ -472,10 +483,6 @@ def _validate_config(config: LSRKHConvergenceConfig) -> None:
     if face_order_mode == "simplex_strict" and surface_inverse_mass_mode != "projected":
         raise ValueError(
             "face_order_mode='simplex_strict' requires surface_inverse_mass_mode='projected'."
-        )
-    if interior_trace_mode == "exact_trace" and surface_inverse_mass_mode != "diagonal":
-        raise ValueError(
-            "surface_inverse_mass_mode='projected' is not supported with interior_trace_mode='exact_trace'."
         )
     q_boundary_correction_mode = str(config.q_boundary_correction_mode).strip().lower()
     if q_boundary_correction_mode not in ("inflow", "boundary", "all"):
@@ -733,6 +740,7 @@ def _build_rhs_function(
             physical_boundary_mode=context["physical_boundary_mode"],
             q_boundary_correction=q_boundary_correction,
             q_boundary_correction_mode=context["q_boundary_correction_mode"],
+            surface_inverse_mass_T=context["surface_inverse_mass_t"],
             use_numba=config.use_numba,
             conn=level_state["conn"],
             surface_cache=level_state["surface_cache"],
@@ -776,7 +784,7 @@ def _run_lsrk_h_convergence_for_tf(
         )
 
         tf_target = float(tf)
-        reached_tf = bool(np.isclose(tf_used, tf_target, atol=1e-12, rtol=1e-12))
+        reached_tf = bool(is_tf_reached(tf_used, tf_target))
 
         q_exact_at_stop = context["q_exact"](level_state["X"], level_state["Y"], t=tf_used)
         err_at_stop = qf - q_exact_at_stop
@@ -843,8 +851,9 @@ def _run_lsrk_h_convergence_for_tf(
 
     L2_list = [r["L2_error"] for r in results]
     Linf_list = [r["Linf_error"] for r in results]
-    L2_rates = compute_convergence_rate(L2_list)
-    Linf_rates = compute_convergence_rate(Linf_list)
+    h_list = [r["h"] for r in results]
+    L2_rates = compute_convergence_rate(L2_list, h_list)
+    Linf_rates = compute_convergence_rate(Linf_list, h_list)
 
     for i, row in enumerate(results):
         row["rate_L2"] = L2_rates[i]

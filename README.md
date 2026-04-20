@@ -192,6 +192,7 @@ but `cli.*` is the canonical entry point going forward.
 - `--tau FLOAT` sets the shared default for both tau roles
 - `--tau-interior FLOAT` overrides the penalty tau on interior faces and non-`exact_qb` exterior traces
 - `--tau-qb FLOAT` overrides the penalty tau on `physical-boundary-mode=exact_qb` faces only
+- `--time-cli` enables tf-scan summary outputs (terminal table + merged CSV + summary CSV + PNG)
 
 `cli.plot_lsrk_error_vs_time` visible parameters:
 
@@ -211,11 +212,27 @@ but `cli.*` is the canonical entry point going forward.
 - `--tau-qb FLOAT` overrides the penalty tau on `physical-boundary-mode=exact_qb` faces only
 - `--output PATH`
 
+`cli.plot_lsrk_error_vs_time` additionally reports final-time spatial convergence order across mesh levels
+using `h=1/n` with strict final-time gating:
+
+- if all mesh runs reach `tf`, rates are computed and reported
+- if any mesh run stops early, rates are marked unavailable (`NaN`)
+
+Outputs for the plot command now include:
+
+- `<stem>.csv`: time-history series (`time`, `L2_error`, `Linf_error`, `max_abs_q`) per mesh level
+- `<stem>_convergence_summary.csv`: one row per mesh level with final errors and `rate_L2` / `rate_Linf`
+
+When `cli.run_lsrk_h_convergence` is launched with `--time-cli`, outputs additionally include:
+
+- `<time_stem>.csv`: merged raw rows across all `--tf-values` with an added `tf_scan` column
+- `<time_stem>_summary.csv`: one-row-per-tf summary (`reached_tf_all`, finest-level errors, last/avg rates, elapsed time, `rate_status`)
+- `<time_stem>.png`: tf-scan figure (rate-vs-tf + finest-error-vs-tf)
+
 Current constraints:
 
 - `face-order-mode=simplex` and `simplex_strict` currently support `interior-trace-mode=exchange` only
 - `face-order-mode=simplex_strict` requires `surface-inverse-mass-mode=projected`
-- `interior-trace-mode=exact_trace` does not support `surface-inverse-mass-mode=projected`
 - `qb-correction` requires at least one exact source: `interior-trace-mode=exact_trace` or `physical-boundary-mode=exact_qb`
 
 `tau=0` is still pure upwind. If `--tau-interior` or `--tau-qb` is omitted, it falls back to the shared `--tau` value.

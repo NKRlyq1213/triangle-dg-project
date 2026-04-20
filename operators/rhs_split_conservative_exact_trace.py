@@ -114,10 +114,37 @@ def _surface_lift_exact_trace(
     length: np.ndarray,
     area: np.ndarray,
     ws: np.ndarray,
+    surface_inverse_mass_t: np.ndarray | None = None,
     *,
     use_numba: bool,
 ) -> np.ndarray:
     ws = np.asarray(ws, dtype=float).reshape(-1)
+    p_arr = np.ascontiguousarray(np.asarray(p, dtype=float), dtype=float)
+    Np = int(ws.size)
+
+    if surface_inverse_mass_t is not None:
+        surface_inverse_mass_t = np.asarray(surface_inverse_mass_t, dtype=float)
+        if (
+            surface_inverse_mass_t.ndim != 2
+            or surface_inverse_mass_t.shape[0] != Np
+            or surface_inverse_mass_t.shape[1] != Np
+        ):
+            raise ValueError("surface_inverse_mass_t must be a square (Np, Np) array.")
+
+        length_arr = np.asarray(length, dtype=float)
+        area_arr = np.asarray(area, dtype=float)
+        face_weights_arr = np.asarray(face_weights, dtype=float)
+
+        surface_integral = np.zeros((p_arr.shape[0], Np), dtype=float)
+        for f in range(3):
+            ids = np.asarray(face_node_ids[f], dtype=np.int64)
+            face_contrib = length_arr[:, f][:, None] * face_weights_arr[f, :][None, :] * p_arr[:, f, :]
+            surface_integral[:, ids] += face_contrib
+
+        surface_rhs = surface_integral @ surface_inverse_mass_t
+        surface_rhs /= area_arr[:, None]
+        return surface_rhs
+
     inv_ws = 1.0 / ws
 
     length_over_area = np.ascontiguousarray(
@@ -129,7 +156,6 @@ def _surface_lift_exact_trace(
         dtype=float,
     )
 
-    p_arr = np.ascontiguousarray(np.asarray(p, dtype=float), dtype=float)
     ids_arr = np.ascontiguousarray(np.asarray(face_node_ids, dtype=np.int64), dtype=np.int64)
 
     if use_numba and _NUMBA_AVAILABLE:
@@ -138,7 +164,7 @@ def _surface_lift_exact_trace(
             ids_arr,
             face_weight_scale,
             length_over_area,
-            int(ws.size),
+            Np,
         )
 
     return _surface_lift_vectorized(
@@ -146,7 +172,7 @@ def _surface_lift_exact_trace(
         ids_arr,
         face_weight_scale,
         length_over_area,
-        int(ws.size),
+        Np,
     )
 
 
@@ -235,6 +261,7 @@ def surface_term_from_exact_trace(
     physical_boundary_mode: str = "exact_qb",
     q_boundary_correction=None,
     q_boundary_correction_mode: str = "all",
+    surface_inverse_mass_T: np.ndarray | None = None,
     use_numba: bool = False,
     conn: dict | None = None,
     surface_cache: dict | None = None,
@@ -369,6 +396,7 @@ def surface_term_from_exact_trace(
         length=np.asarray(face_geom["length"], dtype=float),
         area=np.asarray(face_geom["area"], dtype=float),
         ws=ws,
+        surface_inverse_mass_t=surface_inverse_mass_T,
         use_numba=use_numba,
     )
 
@@ -425,6 +453,7 @@ def rhs_split_conservative_exact_trace(
     physical_boundary_mode: str = "exact_qb",
     q_boundary_correction=None,
     q_boundary_correction_mode: str = "all",
+    surface_inverse_mass_T: np.ndarray | None = None,
     use_numba: bool = False,
     conn: dict | None = None,
     surface_cache: dict | None = None,
@@ -465,6 +494,7 @@ def rhs_split_conservative_exact_trace(
         physical_boundary_mode=physical_boundary_mode,
         q_boundary_correction=q_boundary_correction,
         q_boundary_correction_mode=q_boundary_correction_mode,
+        surface_inverse_mass_T=surface_inverse_mass_T,
         use_numba=use_numba,
         conn=conn,
         surface_cache=surface_cache,
