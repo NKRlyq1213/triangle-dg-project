@@ -187,7 +187,7 @@ but `cli.*` is the canonical entry point going forward.
 - `--test-function {sin2pi_x,sin2pi_y,sin2pi_xy}`
 - `--physical-boundary-mode {exact_qb,opposite_boundary,periodic_vmap}`
 - `--interior-trace-mode {exchange,exact_trace}`
-- `--face-order-mode {triangle,simplex,simplex_strict}`
+- `--face-order-mode {triangle,simplex}`
 - `--diagonal {main,anti}`, `--mesh-levels ...`, `--tf-values ...` override preset mesh/time settings
 - `--tau FLOAT` sets the shared default for both tau roles
 - `--tau-interior FLOAT` overrides the penalty tau on interior faces and non-`exact_qb` exterior traces
@@ -203,7 +203,7 @@ but `cli.*` is the canonical entry point going forward.
 - `--dt-cfl-mode {n2,nplus1-squared}`
 - `--test-function {sin2pi_x,sin2pi_y,sin2pi_xy}`
 - `--physical-boundary-mode {exact_qb,opposite_boundary,periodic_vmap}`
-- `--face-order-mode {triangle,simplex,simplex_strict}`
+- `--face-order-mode {triangle,simplex}`
 - `--interior-trace-mode {exchange,exact_trace}`
 - `--qb-correction {off,on}`
 - `--surface-inverse-mass-mode {diagonal,projected}`
@@ -231,8 +231,7 @@ When `cli.run_lsrk_h_convergence` is launched with `--time-cli`, outputs additio
 
 Current constraints:
 
-- `face-order-mode=simplex` and `simplex_strict` currently support `interior-trace-mode=exchange` only
-- `face-order-mode=simplex_strict` requires `surface-inverse-mass-mode=projected`
+- `face-order-mode=simplex` currently supports `interior-trace-mode=exchange` only
 - `qb-correction` requires at least one exact source: `interior-trace-mode=exact_trace` or `physical-boundary-mode=exact_qb`
 
 `tau=0` is still pure upwind. If `--tau-interior` or `--tau-qb` is omitted, it falls back to the shared `--tau` value.

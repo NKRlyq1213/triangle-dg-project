@@ -474,15 +474,11 @@ def _validate_config(config: LSRKHConvergenceConfig) -> None:
             "physical_boundary_mode must be one of: 'exact_qb', 'opposite_boundary', 'periodic_vmap'."
         )
     face_order_mode = str(config.face_order_mode).strip().lower()
-    if face_order_mode not in ("triangle", "simplex", "simplex_strict"):
-        raise ValueError("face_order_mode must be one of: 'triangle', 'simplex', 'simplex_strict'.")
+    if face_order_mode not in ("triangle", "simplex"):
+        raise ValueError("face_order_mode must be one of: 'triangle', 'simplex'.")
     if interior_trace_mode != "exchange" and face_order_mode != "triangle":
         raise ValueError(
-            "face_order_mode='simplex' and 'simplex_strict' currently support interior_trace_mode='exchange' only."
-        )
-    if face_order_mode == "simplex_strict" and surface_inverse_mass_mode != "projected":
-        raise ValueError(
-            "face_order_mode='simplex_strict' requires surface_inverse_mass_mode='projected'."
+            "face_order_mode='simplex' currently supports interior_trace_mode='exchange' only."
         )
     q_boundary_correction_mode = str(config.q_boundary_correction_mode).strip().lower()
     if q_boundary_correction_mode not in ("inflow", "boundary", "all"):

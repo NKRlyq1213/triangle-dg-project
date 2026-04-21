@@ -36,7 +36,7 @@ implementations, but they are compatibility shims.
 2. Choose trace geometry behavior / 再選 trace 幾何行為
    - `--physical-boundary-mode {exact_qb,opposite_boundary,periodic_vmap}`
    - `--interior-trace-mode {exchange,exact_trace}`
-   - `--face-order-mode {triangle,simplex,simplex_strict}`
+   - `--face-order-mode {triangle,simplex}`
 3. Choose lifting and penalties / 再選 lifting 與數值耗散
    - `--surface-inverse-mass-mode {diagonal,projected}`
    - `--tau`, `--tau-interior`, `--tau-qb`
@@ -71,7 +71,7 @@ python -m cli.run_lsrk_h_convergence
   Default: `exact_qb`
 - `--interior-trace-mode {exchange,exact_trace}`
   Default: `exchange`
-- `--face-order-mode {triangle,simplex,simplex_strict}`
+- `--face-order-mode {triangle,simplex}`
   Default: `triangle`
 - `--tau FLOAT`
   Default: `0.0`
@@ -151,7 +151,7 @@ python -m cli.plot_lsrk_error_vs_time
   Default: `sin2pi_x`
 - `--physical-boundary-mode {exact_qb,opposite_boundary,periodic_vmap}`
   Default: `exact_qb`
-- `--face-order-mode {triangle,simplex,simplex_strict}`
+- `--face-order-mode {triangle,simplex}`
   Default: `triangle`
 - `--interior-trace-mode {exchange,exact_trace}`
   Default: `exchange`
@@ -198,8 +198,6 @@ The following are enforced by runtime checks:
 | Condition | Status | Reason |
 | --- | --- | --- |
 | `interior-trace-mode=exact_trace` + `face-order-mode=simplex` | Invalid | `simplex` currently supports `exchange` only |
-| `interior-trace-mode=exact_trace` + `face-order-mode=simplex_strict` | Invalid | `simplex_strict` currently supports `exchange` only |
-| `face-order-mode=simplex_strict` + `surface-inverse-mass-mode=diagonal` | Invalid | `simplex_strict` requires `projected` |
 | `qb-correction=on/compare` + no exact source | Invalid | requires `interior-trace-mode=exact_trace` or `physical-boundary-mode=exact_qb` |
 
 Supported combination:
@@ -232,31 +230,25 @@ python -m cli.run_lsrk_h_convergence --preset upstream-pbc --physical-boundary-m
 python -m cli.run_lsrk_h_convergence --preset quick --physical-boundary-mode periodic_vmap
 ```
 
-### 5) `simplex_strict + projected` / 嚴格 simplex 面序
-
-```bash
-python -m cli.run_lsrk_h_convergence --preset quick --face-order-mode simplex_strict --surface-inverse-mass-mode projected --interior-trace-mode exchange
-```
-
-### 6) Compare baseline vs correction / 比較 baseline 與修正
+### 5) Compare baseline vs correction / 比較 baseline 與修正
 
 ```bash
 python -m cli.run_lsrk_h_convergence --preset quick --physical-boundary-mode exact_qb --qb-correction compare
 ```
 
-### 7) `exact_trace + projected` / exact-trace 搭配 projected lifting
+### 6) `exact_trace + projected` / exact-trace 搭配 projected lifting
 
 ```bash
 python -m cli.run_lsrk_h_convergence --preset quick --interior-trace-mode exact_trace --surface-inverse-mass-mode projected
 ```
 
-### 8) Time CLI summary outputs / 時間掃描輸出
+### 7) Time CLI summary outputs / 時間掃描輸出
 
 ```bash
 python -m cli.run_lsrk_h_convergence --preset quick --mesh-levels 2 4 8 --tf-values 0.1 0.2 0.5 --time-cli
 ```
 
-### 9) Multi-mesh error-vs-time overlay / 多網格誤差隨時間曲線
+### 8) Multi-mesh error-vs-time overlay / 多網格誤差隨時間曲線
 
 ```bash
 python -m cli.plot_lsrk_error_vs_time --mesh-levels 8 16 32 --tf 1.0 --test-function sin2pi_xy --physical-boundary-mode periodic_vmap --face-order-mode simplex
@@ -265,9 +257,6 @@ python -m cli.plot_lsrk_error_vs_time --mesh-levels 8 16 32 --tf 1.0 --test-func
 ### Expected invalid examples / 預期失敗範例
 
 ```bash
-# invalid: simplex_strict requires projected
-python -m cli.plot_lsrk_error_vs_time --face-order-mode simplex_strict --surface-inverse-mass-mode diagonal
-
 # invalid: correction needs at least one exact source
 python -m cli.plot_lsrk_error_vs_time --physical-boundary-mode opposite_boundary --interior-trace-mode exchange --qb-correction on
 ```

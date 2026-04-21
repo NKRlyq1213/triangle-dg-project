@@ -11,7 +11,6 @@ from geometry.affine_map import map_reference_nodes_to_all_elements
 from geometry.connectivity import build_face_connectivity
 from geometry.face_metrics import affine_face_geometry_from_mesh
 from geometry.mesh_structured import structured_square_tri_mesh
-from geometry.reference_triangle import reference_triangle_area
 from operators.exchange import evaluate_all_face_values
 from operators.rhs_split_conservative_exact_trace import surface_term_from_exact_trace
 from operators.rhs_split_conservative_exchange import (
@@ -138,33 +137,14 @@ def test_projected_inverse_mass_lifting_numba_matches_numpy() -> None:
         cache=cache,
         use_numba=False,
         surface_inverse_mass_T=surface_inverse_mass_t,
-        lift_scale=1.0,
     )
     lifted_numba = _lift_surface_penalty_to_volume(
         p=p,
         cache=cache,
         use_numba=True,
         surface_inverse_mass_T=surface_inverse_mass_t,
-        lift_scale=1.0,
     )
     assert np.allclose(lifted_numba, lifted_numpy, atol=1e-12, rtol=1e-12)
-
-    strict_scale = float(reference_triangle_area())
-    lifted_numpy_scaled = _lift_surface_penalty_to_volume(
-        p=p,
-        cache=cache,
-        use_numba=False,
-        surface_inverse_mass_T=surface_inverse_mass_t,
-        lift_scale=strict_scale,
-    )
-    lifted_numba_scaled = _lift_surface_penalty_to_volume(
-        p=p,
-        cache=cache,
-        use_numba=True,
-        surface_inverse_mass_T=surface_inverse_mass_t,
-        lift_scale=strict_scale,
-    )
-    assert np.allclose(lifted_numba_scaled, lifted_numpy_scaled, atol=1e-12, rtol=1e-12)
 
 
 @pytest.mark.parametrize(

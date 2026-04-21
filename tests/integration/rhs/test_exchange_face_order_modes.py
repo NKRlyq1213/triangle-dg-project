@@ -1,21 +1,17 @@
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
 from data.table1_rules import load_table1_rule
 from experiments.lsrk_h_convergence import (
-    build_projected_inverse_mass_from_rule,
     build_reference_diff_operators_from_rule,
 )
-from geometry.reference_triangle import reference_triangle_area
 from geometry.affine_map import map_reference_nodes_to_all_elements
 from geometry.connectivity import build_face_connectivity
 from geometry.face_metrics import affine_face_geometry_from_mesh
 from geometry.mesh_structured import structured_square_tri_mesh
 from geometry.metrics import affine_geometric_factors_from_mesh
 from operators.rhs_split_conservative_exchange import (
-    _lift_surface_penalty_to_volume,
     build_surface_exchange_cache,
     rhs_split_conservative_exchange,
 )
@@ -147,61 +143,6 @@ def test_face_order_triangle_and_simplex_are_rhs_equivalent() -> None:
         atol=1e-12,
         rtol=1e-12,
     )
-
-
-def test_simplex_strict_requires_projected_inverse_mass() -> None:
-    fx = _build_fixture()
-
-    with pytest.raises(ValueError, match="simplex_strict"):
-        _eval_rhs(
-            fx,
-            face_order_mode="simplex_strict",
-            physical_boundary_mode="opposite_boundary",
-            surface_inverse_mass_t=None,
-        )
-
-
-def test_simplex_strict_applies_surface_lift_scale() -> None:
-    fx = _build_fixture()
-    projected_inverse_mass = build_projected_inverse_mass_from_rule(fx["rule"], 4)
-    surface_inverse_mass_t = np.ascontiguousarray(projected_inverse_mass.T, dtype=float)
-
-    _, diag_simplex = _eval_rhs(
-        fx,
-        face_order_mode="simplex",
-        physical_boundary_mode="opposite_boundary",
-        surface_inverse_mass_t=surface_inverse_mass_t,
-    )
-    _, diag_strict = _eval_rhs(
-        fx,
-        face_order_mode="simplex_strict",
-        physical_boundary_mode="opposite_boundary",
-        surface_inverse_mass_t=surface_inverse_mass_t,
-    )
-
-    surf_simplex = np.asarray(diag_simplex["surface_rhs"], dtype=float)
-    surf_strict = np.asarray(diag_strict["surface_rhs"], dtype=float)
-
-    assert np.max(np.abs(surf_simplex)) > 1e-10
-    assert float(diag_simplex["surface_lift_scale"]) == pytest.approx(1.0)
-    assert float(diag_strict["surface_lift_scale"]) == pytest.approx(reference_triangle_area())
-    assert not np.allclose(surf_strict, surf_simplex, atol=1e-12, rtol=1e-12)
-
-    cache_strict = build_surface_exchange_cache(
-        rule=fx["rule"],
-        trace=fx["trace"],
-        conn=fx["conn"],
-        face_geom=fx["face_geom"],
-        face_order_mode="simplex_strict",
-    )
-    strict_recomputed = _lift_surface_penalty_to_volume(
-        p=np.asarray(diag_strict["p"], dtype=float),
-        cache=cache_strict,
-        use_numba=False,
-        surface_inverse_mass_T=surface_inverse_mass_t,
-        lift_scale=float(diag_strict["surface_lift_scale"]),
-    )
-    assert np.allclose(strict_recomputed, surf_strict, atol=1e-12, rtol=1e-12)
 
 
 def test_periodic_vmap_regression_with_face_order_modes() -> None:

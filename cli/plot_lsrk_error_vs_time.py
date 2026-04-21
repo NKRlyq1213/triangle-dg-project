@@ -137,9 +137,9 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--face-order-mode",
-        choices=("triangle", "simplex", "simplex_strict"),
+        choices=("triangle", "simplex"),
         default="triangle",
-        help="surface face-index convention: triangle(default), simplex, or simplex_strict",
+        help="surface face-index convention: triangle(default) or simplex",
     )
     parser.add_argument(
         "--interior-trace-mode",
@@ -623,11 +623,7 @@ def main() -> None:
 
     if interior_trace_mode != "exchange" and face_order_mode != "triangle":
         raise ValueError(
-            "face-order-mode='simplex' and 'simplex_strict' currently support interior-trace-mode='exchange' only."
-        )
-    if face_order_mode == "simplex_strict" and surface_inverse_mass_mode != "projected":
-        raise ValueError(
-            "face-order-mode='simplex_strict' requires surface-inverse-mass-mode='projected'."
+            "face-order-mode='simplex' currently supports interior-trace-mode='exchange' only."
         )
     exact_source_exists = (interior_trace_mode == "exact_trace") or (boundary_mode == "exact_qb")
     if args.qb_correction == "on" and (not exact_source_exists):

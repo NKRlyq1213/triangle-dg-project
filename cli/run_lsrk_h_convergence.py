@@ -365,9 +365,9 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--face-order-mode",
-        choices=("triangle", "simplex", "simplex_strict"),
+        choices=("triangle", "simplex"),
         default="triangle",
-        help="surface face-index convention: triangle(default), simplex, or simplex_strict",
+        help="surface face-index convention: triangle(default) or simplex",
     )
     parser.add_argument(
         "--tau",

@@ -17,7 +17,6 @@ from operators.exchange import (
     pair_face_traces,
     interior_face_pair_mismatches,
 )
-from geometry.reference_triangle import reference_triangle_area
 
 
 def _should_use_numba(use_numba: bool | None) -> bool:
@@ -64,33 +63,18 @@ def _resolve_surface_backend(
 
 def _resolve_face_order_mode(face_order_mode: str | None) -> str:
     mode = "triangle" if face_order_mode is None else str(face_order_mode).strip().lower()
-    if mode not in ("triangle", "simplex", "simplex_strict"):
-        raise ValueError("face_order_mode must be one of: 'triangle', 'simplex', 'simplex_strict'.")
+    if mode not in ("triangle", "simplex"):
+        raise ValueError("face_order_mode must be one of: 'triangle', 'simplex'.")
     return mode
 
 
 def _is_simplex_like_face_mode(face_order_mode: str) -> bool:
     mode = _resolve_face_order_mode(face_order_mode)
-    return mode in ("simplex", "simplex_strict")
+    return mode == "simplex"
 
 
 def _canonical_face_axis_mode(face_order_mode: str) -> str:
     return "simplex" if _is_simplex_like_face_mode(face_order_mode) else "triangle"
-
-
-def _resolve_surface_lift_scale(
-    *,
-    face_order_mode: str,
-    surface_inverse_mass_T: np.ndarray | None,
-) -> float:
-    mode = _resolve_face_order_mode(face_order_mode)
-    if mode != "simplex_strict":
-        return 1.0
-    if surface_inverse_mass_T is None:
-        raise ValueError(
-            "face_order_mode='simplex_strict' requires surface_inverse_mass_T (projected inverse-mass lifting)."
-        )
-    return float(reference_triangle_area())
 
 
 def _face_axis_permutations(face_order_mode: str) -> tuple[np.ndarray, np.ndarray]:
@@ -1313,13 +1297,9 @@ def _lift_surface_penalty_to_volume(
     cache: dict,
     use_numba: bool | None,
     surface_inverse_mass_T: np.ndarray | None = None,
-    lift_scale: float = 1.0,
 ) -> np.ndarray:
     K = int(cache["K"])
     Np = int(cache["Np"])
-    lift_scale = float(lift_scale)
-    if (not np.isfinite(lift_scale)) or lift_scale <= 0.0:
-        raise ValueError("lift_scale must be a finite positive scalar.")
 
     if surface_inverse_mass_T is not None:
         surface_inverse_mass_t = np.asarray(surface_inverse_mass_T, dtype=float)
@@ -1363,27 +1343,6 @@ def _lift_surface_penalty_to_volume(
 
             surface_rhs = surface_integral @ surface_inverse_mass_t
             surface_rhs /= area_numba[:, None]
-            if lift_scale != 1.0:
-                surface_rhs *= lift_scale
-            return surface_rhs
-
-        if lift_scale != 1.0:
-            length = np.asarray(cache["length"], dtype=float)
-            area = np.asarray(cache["area"], dtype=float)
-            we_faces_matrix = np.asarray(cache["we_faces_matrix"], dtype=float)
-            E_face_matrix = np.asarray(cache["E_face_matrix"], dtype=float)
-            if we_faces_matrix.shape != (3, p.shape[2]):
-                raise ValueError("we_faces_matrix shape mismatch in surface cache.")
-            if E_face_matrix.shape != (3 * p.shape[2], Np):
-                raise ValueError("E_face_matrix shape mismatch in surface cache.")
-
-            scaled_penalty = (
-                p * we_faces_matrix[None, :, :] * length[:, :, None]
-            ).transpose(1, 2, 0).reshape(3 * p.shape[2], K)
-            surface_integral = E_face_matrix.T @ scaled_penalty
-            surface_rhs = surface_integral.T @ surface_inverse_mass_t
-            surface_rhs /= area[:, None]
-            surface_rhs *= lift_scale
             return surface_rhs
 
         ids_faces = cache["ids_faces"]
@@ -1407,8 +1366,6 @@ def _lift_surface_penalty_to_volume(
 
         surface_rhs = surface_integral @ surface_inverse_mass_t
         surface_rhs /= area[:, None]
-        if lift_scale != 1.0:
-            surface_rhs *= lift_scale
         return surface_rhs
 
     surface_rhs = np.zeros((K, Np), dtype=float)
@@ -1460,9 +1417,6 @@ def _lift_surface_penalty_to_volume(
             row_idx = np.broadcast_to(np.arange(K)[:, None], face_contrib.shape)
             col_idx = np.broadcast_to(ids[None, :], face_contrib.shape)
             np.add.at(surface_rhs, (row_idx, col_idx), face_contrib)
-
-    if lift_scale != 1.0:
-        surface_rhs *= lift_scale
 
     return surface_rhs
 
@@ -1536,10 +1490,6 @@ def surface_term_from_exchange(
         raise ValueError(
             "surface_cache face-order mode does not match requested face_order_mode."
         )
-    surface_lift_scale = _resolve_surface_lift_scale(
-        face_order_mode=requested_face_mode,
-        surface_inverse_mass_T=surface_inverse_mass_T,
-    )
     face_perm_new_to_old = np.asarray(
         cache.get("face_perm_new_to_old", np.asarray([0, 1, 2], dtype=np.int64)),
         dtype=np.int64,
@@ -1755,7 +1705,6 @@ def surface_term_from_exchange(
             cache,
             use_numba=use_numba,
             surface_inverse_mass_T=surface_inverse_mass_T,
-            lift_scale=surface_lift_scale,
         )
 
         if not return_diagnostics:
@@ -1800,7 +1749,6 @@ def surface_term_from_exchange(
             "interior_mismatches": mismatches,
             "surface_backend": "face-major",
             "face_order_mode": requested_face_mode,
-            "surface_lift_scale": float(surface_lift_scale),
         }
         return surface_rhs, diagnostics
 
@@ -1837,7 +1785,6 @@ def surface_term_from_exchange(
         cache,
         use_numba=use_numba,
         surface_inverse_mass_T=surface_inverse_mass_T,
-        lift_scale=surface_lift_scale,
     )
 
     if not return_diagnostics:
@@ -1879,7 +1826,6 @@ def surface_term_from_exchange(
         "interior_mismatches": mismatches,
         "surface_backend": "legacy",
         "face_order_mode": requested_face_mode,
-        "surface_lift_scale": float(surface_lift_scale),
     }
     return surface_rhs, diagnostics
 

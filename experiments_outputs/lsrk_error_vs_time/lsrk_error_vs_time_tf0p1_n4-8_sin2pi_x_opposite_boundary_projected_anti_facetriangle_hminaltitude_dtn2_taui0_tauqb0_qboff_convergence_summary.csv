@@ -1,0 +1,3 @@
+mesh_level,h,reached_tf,tf_used,tau_interior,tau_qb,L2_error_final,rate_L2,Linf_error_final,rate_Linf,rate_status
+4,0.25,True,0.1,0.0,0.0,0.0002389307569876114,nan,0.001981336359595076,nan,ok
+8,0.125,True,0.1,0.0,0.0,9.289759847136356e-06,4.684807468750994,8.25595944793367e-05,4.584894124009936,ok
