@@ -497,7 +497,7 @@ def _build_config(
             diagonal="anti",
             mesh_levels=(1, 2, 4, 8, 16),
             cfl=0.05,
-            tf_values=(5.0,),
+            tf_values=(1.0,),
             tau=float(tau),
             tau_interior=None if tau_interior is None else float(tau_interior),
             tau_qb=None if tau_qb is None else float(tau_qb),
