@@ -34,6 +34,11 @@ from .exchange import (
     pair_face_traces,
     interior_face_pair_mismatches,
 )
+from .sdg_flattened_divergence import (
+    build_table1_reference_diff_operators,
+    divergence_stats_by_patch,
+    sdg_flattened_cartesian_divergence,
+)
 
 from .rhs_split_conservative_exact_trace import (
     volume_term_split_conservative as volume_term_split_conservative_exact_trace,
@@ -80,6 +85,9 @@ __all__ = [
     "unique_interior_face_pairs",
     "pair_face_traces",
     "interior_face_pair_mismatches",
+    "build_table1_reference_diff_operators",
+    "divergence_stats_by_patch",
+    "sdg_flattened_cartesian_divergence",
     "volume_term_split_conservative",
     "volume_term_split_conservative_exact_trace",
     "volume_term_split_conservative_exchange",

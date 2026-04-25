@@ -28,6 +28,34 @@ implementations, but they are compatibility shims.
 
 `demo.experiments.*` 仍可使用，但僅作為相容層；正式流程建議使用 `cli.*`。
 
+## Sphere / SDG Diagnostics (non-canonical) / Sphere / SDG 診斷（非標準 CLI）
+
+The following scripts are geometry or diagnostic demos. They are not part of the
+canonical `cli.*` contract and should not be documented or interpreted as stable
+experiment-entry APIs.
+
+下列腳本屬於幾何/診斷 demo，不屬於正式 `cli.*` 契約，也不應視為穩定的
+canonical experiment API。
+
+- `python -m demo.demo_sphere_mapping_diagnostics`
+  Output: `outputs/sphere_mapping/`
+- `python -m demo.demo_sdg_mapping_diagnostics`
+  Output: `outputs/sdg_mapping/`
+- `python -m demo.demo_sdg_seam_connectivity`
+  Output: `outputs/sdg_seam_connectivity/`
+- `python -m demo.demo_sdg_flattened_divergence`
+  Output: `outputs/sdg_flattened_divergence/`
+- `python -m demo.demo_sdg_divergence_validation`
+  Output: `outputs/sdg_divergence_validation/`
+- `python -m demo.demo_sdg_Ainv_T1_stable_check`
+  Output: `outputs/sdg_Ainv_T1_stable/`
+- `python -m demo.demo_sdg_Ainv_stable_all_patches_check`
+  Output: `outputs/sdg_Ainv_stable_all_patches/`
+
+These diagnostics default to `outputs/`, not `experiments_outputs/`.
+
+這批診斷腳本的預設輸出在 `outputs/`，與 `experiments_outputs/` 分流。
+
 ## LSRK CLI Decision Flow / LSRK CLI 決策流程
 
 1. Choose your goal / 先選目標
@@ -315,6 +343,16 @@ Current canonical layout:
 - `experiments_outputs/lsrk_h_convergence/`
 - `experiments_outputs/lsrk_error_vs_time/`
 - `experiments_outputs/scratch/`
+
+Non-canonical sphere/SDG demos instead write to `outputs/`, for example:
+
+- `outputs/sphere_mapping/`
+- `outputs/sdg_mapping/`
+- `outputs/sdg_seam_connectivity/`
+- `outputs/sdg_flattened_divergence/`
+- `outputs/sdg_divergence_validation/`
+- `outputs/sdg_Ainv_T1_stable/`
+- `outputs/sdg_Ainv_stable_all_patches/`
 
 ## Demo Output Layout / Demo 輸出布局
 

@@ -8,12 +8,13 @@ Triangle-domain polynomial reconstruction and DG-oriented operators on the refer
 
 This repository provides reusable numerical components for triangle-based DG workflows.
 It focuses on basis construction, quadrature handling, differentiation and reconstruction
-operators, geometric mappings, exchange-based RHS assembly, and experiment runners.
+operators, geometric mappings, exchange-based RHS assembly, sphere/SDG geometry
+diagnostics, and experiment runners.
 
 Current state is a DG-ready foundation, not yet a complete production solver.
 
 本專案提供可重用的三角形 DG 工作流程數值元件，重點在基底、積分規則、微分/重建運算元、
-幾何映射、exchange-based RHS 組裝與實驗執行工具。
+幾何映射、exchange-based RHS 組裝、sphere/SDG 幾何診斷與實驗執行工具。
 
 目前定位為 DG-ready foundation，尚未是完整的 production solver。
 
@@ -74,12 +75,12 @@ data/               Table-1/Table-2 quadrature rules and edge rules
 demo/               Foundations, visualization, and advanced demos
 docs/               Project notes and experiment CLI docs
 experiments/        Experiment backends and output-path helpers
-geometry/           Reference triangle, affine maps, metrics, connectivity
-operators/          Vandermonde, mass, differentiation, trace, RHS assembly
-problems/           Analytic fields and initial-condition helpers
+geometry/           Reference triangle, affine maps, sphere/SDG mappings, metrics, connectivity
+operators/          Vandermonde, mass, differentiation, trace, RHS assembly, SDG divergence diagnostics
+problems/           Analytic fields, initial conditions, and sphere-advection velocity helpers
 time_integration/   CFL utilities and LSRK54 integrator
 tests/              unit, integration, and regression coverage
-visualization/      Plotting helpers for scalar fields and diagnostics
+visualization/      Plotting helpers for scalar fields, mapping, seam, and divergence diagnostics
 ```
 
 上面列出目前核心模組分工；若你要擴充功能，建議優先在 `experiments/`、`operators/`、`tests/`
@@ -124,6 +125,31 @@ coeffs = fit_modal_coefficients_weighted(
 
 以上示範以加權最小平方法進行 modal reconstruction。
 
+Sphere / SDG flattened mapping quick start:
+
+```python
+from data import load_table1_rule
+from geometry import sphere_flat_square_mesh, build_sphere_flat_geometry_cache
+from problems import flattened_velocity_from_cache
+
+rule = load_table1_rule(3)
+VX, VY, EToV, elem_patch_id = sphere_flat_square_mesh(n_sub=2, R=1.0)
+
+cache = build_sphere_flat_geometry_cache(
+    rs_nodes=rule["rs"],
+    VX=VX,
+    VY=VY,
+    EToV=EToV,
+    elem_patch_id=elem_patch_id,
+    R=1.0,
+)
+
+u1, u2, u_sph, v_sph = flattened_velocity_from_cache(cache, u0=1.0, alpha0=0.0)
+```
+
+以上示範使用 package-level import 建立 flattened-square sphere geometry cache，
+並轉成平面速度與球面切向速度。
+
 ## Commands / 指令
 
 Run commands from the project root.
@@ -161,6 +187,23 @@ python -m demo.visualization.demo_radial_sampling_table2
 python -m demo.advanced.demo_differentiation_weighted
 python -m demo.advanced.demo_split_gaussian_field
 ```
+
+### Sphere / SDG Diagnostics / Sphere / SDG 診斷
+
+```bash
+python -m demo.demo_sphere_mapping_diagnostics
+python -m demo.demo_sdg_mapping_diagnostics
+python -m demo.demo_sdg_seam_connectivity
+python -m demo.demo_sdg_flattened_divergence
+python -m demo.demo_sdg_divergence_validation
+python -m demo.demo_sdg_Ainv_T1_stable_check
+python -m demo.demo_sdg_Ainv_stable_all_patches_check
+```
+
+These scripts are geometry/diagnostic demos. They are intentionally separate from the
+canonical `cli.*` experiment interface.
+
+這批腳本屬於 geometry/diagnostic demo，與標準 `cli.*` 實驗入口分流。
 
 ### Experiments (Canonical CLI) / 實驗（標準 CLI 入口）
 
@@ -258,6 +301,17 @@ Canonical grouped directories:
 - `experiments_outputs/lsrk_error_vs_time/`
 - `experiments_outputs/scratch/`
 
+Sphere / SDG demo diagnostics write under `outputs/`, separate from canonical CLI outputs.
+Current directories include:
+
+- `outputs/sphere_mapping/`
+- `outputs/sdg_mapping/`
+- `outputs/sdg_seam_connectivity/`
+- `outputs/sdg_flattened_divergence/`
+- `outputs/sdg_divergence_validation/`
+- `outputs/sdg_Ainv_T1_stable/`
+- `outputs/sdg_Ainv_stable_all_patches/`
+
 Demo figures are written under `photo/`.
 Both top-level figure files and grouped folders can appear, for example:
 
@@ -289,6 +343,9 @@ Implemented:
 - basis and quadrature utilities
 - Vandermonde, mass, differentiation, reconstruction operators
 - affine geometry and connectivity helpers
+- flattened-square sphere mapping and SDG T1--T8 mapping utilities
+- pole-stable SDG `A^{-1}` formulas and seam-connectivity diagnostics
+- flattened divergence diagnostics for sphere-advection experiments
 - exchange-based split-form RHS building blocks
 - LSRK experiment workflows and visualization demos
 
@@ -297,6 +354,9 @@ Implemented:
 - 基底與積分規則工具
 - Vandermonde、mass、微分與重建運算元
 - 仿射幾何與連通性工具
+- flattened-square sphere mapping 與 SDG T1--T8 映射工具
+- pole-stable SDG `A^{-1}` 公式與 seam connectivity 診斷
+- sphere advection 的 flattened divergence 診斷
 - exchange-based split-form RHS 元件
 - LSRK 實驗流程與視覺化範例
 
