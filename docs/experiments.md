@@ -22,6 +22,12 @@ Use the `cli` package for experiment runs.
   Output: `experiments_outputs/lsrk_h_convergence/`
 - `python -m cli.plot_lsrk_error_vs_time`
   Output: `experiments_outputs/lsrk_error_vs_time/`
+- `python -m cli.run_manifold_lsrk_convergence`
+  Output: `experiments_outputs/manifold_lsrk_convergence/`
+
+Companion notebook for step-based manifold snapshots:
+
+- `Manifold_LSRK_3D_Snapshots.ipynb`
 
 Legacy wrappers under `demo.experiments.*` still forward to the same
 implementations, but they are compatibility shims.
@@ -61,6 +67,7 @@ These diagnostics default to `outputs/`, not `experiments_outputs/`.
 1. Choose your goal / 先選目標
    - `python -m cli.run_lsrk_h_convergence`: h-convergence table (CSV-first)
    - `python -m cli.plot_lsrk_error_vs_time`: time-history curves (PNG+CSV)
+   - `python -m cli.run_manifold_lsrk_convergence`: manifold h-convergence + time-history + snapshots
 2. Choose trace geometry behavior / 再選 trace 幾何行為
    - `--physical-boundary-mode {exact_qb,opposite_boundary,periodic_vmap}`
    - `--interior-trace-mode {exchange,exact_trace}`
@@ -200,6 +207,73 @@ Hidden internal flags:
 
 - `--q-boundary-correction-mode {inflow,boundary,all}` (default `all`)
 - `--use-numba` / `--no-use-numba` (default enabled)
+
+## Manifold LSRK CLI / Manifold LSRK CLI
+
+Command:
+
+```bash
+python -m cli.run_manifold_lsrk_convergence
+```
+
+### Parameters (visible) / 可見參數
+
+- `--mesh-levels INT,INT,...`
+  Default: `2,4,8,16`
+- `--tf FLOAT`
+  Default: `1.0`
+- `--cfl FLOAT`
+  Default: `1.0`
+- `--field-case {gaussian,constant}`
+  Default: `gaussian`
+- `--constant-value FLOAT`
+  Default: `1.0`
+- `--flux-type {upwind,central,lax_friedrichs}`
+  Default: `upwind`
+- `--alpha-lf FLOAT`
+  Default: `1.0`
+- `--gaussian-width FLOAT`
+  Default: `1/sqrt(10)`
+- `--center-xyz X,Y,Z`
+- `--initial-preset {custom,equator,equator_x,equator_y,north_pole,south_pole}`
+- `--R FLOAT`, `--u0 FLOAT`, `--alpha0 FLOAT`
+  Sphere radius and solid-body velocity controls
+- `--use-numba`
+  Default: disabled unless passed explicitly
+
+### Runtime Logic / 執行邏輯
+
+- `field-case=gaussian` compares against the exact transported Gaussian bell.
+- `field-case=constant` compares against the initial constant field and reports drift.
+- `flux-type=upwind` keeps the existing face penalty.
+- `flux-type=central` disables the penalty term.
+- `flux-type=lax_friedrichs` uses the LF penalty and should be paired with a smaller CFL or larger `alpha-lf` only when you want extra dissipation.
+- `initial-preset` selects a convenience Gaussian starting location; `center-xyz` is used when `initial-preset=custom`.
+- When `initial-preset=custom`, `center-xyz` is normalized onto the sphere radius `R`.
+- The CLI always writes:
+  - final h-convergence summary CSV/PNG
+  - per-step time-history CSV/PNG
+- per-step mass-drift PNG, plotted as `|mass error|` on a log scale
+- Output stems include the selected field case, and Gaussian runs also include the starting location so different initial centers do not collide.
+- The time-history CSV now also includes `mass`, `mass_error`, and `mass_rel_error` columns.
+
+LF example:
+
+```bash
+python -m cli.run_manifold_lsrk_convergence --mesh-levels 2,4,8 --tf 6.28 --cfl 1.0 --field-case gaussian --flux-type lax_friedrichs --alpha-lf 1.5
+```
+
+### Output Naming / 輸出命名
+
+- `manifold_lsrk_convergence_table1_k4_gaussian_cx1_cy0_cz0.csv`
+- `manifold_lsrk_convergence_table1_k4_gaussian_cx1_cy0_cz0.png`
+- `manifold_lsrk_error_vs_time_table1_k4_gaussian_cx1_cy0_cz0.csv`
+- `manifold_lsrk_error_vs_time_table1_k4_gaussian_cx1_cy0_cz0.png`
+- `manifold_lsrk_mass_error_vs_time_table1_k4_gaussian_cx1_cy0_cz0.png`
+- `manifold_lsrk_convergence_table1_k4_gaussian_north_pole.csv`
+- `manifold_lsrk_convergence_table1_k4_constant_v1.csv`
+- `manifold_lsrk_error_vs_time_table1_k4_constant_v1.png`
+- `manifold_lsrk_mass_error_vs_time_table1_k4_constant_v1.png`
 
 ### Runtime Logic / 執行邏輯
 

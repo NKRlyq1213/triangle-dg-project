@@ -4,6 +4,7 @@ __pycache__/
 *.pyd
 
 .pytest_cache/
+.tmp_pytest/
 .mypy_cache/
 .ruff_cache/
 

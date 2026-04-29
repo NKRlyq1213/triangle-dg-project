@@ -14,6 +14,15 @@ from .sphere_flat_metrics import (
     geometry_diagnostics,
     per_patch_diagnostics,
 )
+from .sphere_manifold_mesh import (
+    generate_spherical_octahedron_mesh,
+    spherical_mesh_hmin,
+)
+from .sphere_manifold_metrics import (
+    ManifoldGeometryCache,
+    build_manifold_geometry_cache,
+    map_reference_nodes_to_sphere,
+)
 from .sphere_square_patches import (
     A_Ainv_error,
     A_matrix_from_xy_patch,
@@ -63,6 +72,11 @@ __all__ = [
     "build_sphere_flat_geometry_cache",
     "geometry_diagnostics",
     "per_patch_diagnostics",
+    "generate_spherical_octahedron_mesh",
+    "spherical_mesh_hmin",
+    "ManifoldGeometryCache",
+    "build_manifold_geometry_cache",
+    "map_reference_nodes_to_sphere",
     "A_Ainv_error",
     "A_matrix_from_xy_patch",
     "Ainv_from_xy_patch",

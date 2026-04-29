@@ -196,6 +196,7 @@ python -m demo.demo_sdg_mapping_diagnostics
 python -m demo.demo_sdg_seam_connectivity
 python -m demo.demo_sdg_flattened_divergence
 python -m demo.demo_sdg_divergence_validation
+python -m demo.demo_manifold_divergence_diagnostics
 python -m demo.demo_sdg_Ainv_T1_stable_check
 python -m demo.demo_sdg_Ainv_stable_all_patches_check
 ```
@@ -210,6 +211,9 @@ canonical `cli.*` experiment interface.
 ```bash
 python -m cli.run_field_h_convergence
 python -m cli.run_div_h_convergence
+python -m cli.run_manifold_div_h_convergence
+python -m cli.run_manifold_lsrk_convergence --mesh-levels 2,4,8 --tf 0.1 --field-case gaussian
+python -m cli.run_manifold_lsrk_convergence --mesh-levels 2,4,8 --tf 0.1 --field-case constant
 python -m cli.run_rhs_exchange_benchmark
 python -m cli.run_lsrk_h_convergence --preset quick
 python -m cli.plot_lsrk_error_vs_time --mesh-levels 8 16 32 --tf 6.283185307179586 --test-function sin2pi_xy --qb-correction on
@@ -261,9 +265,39 @@ using `h=1/n` with strict final-time gating:
 - if all mesh runs reach `tf`, rates are computed and reported
 - if any mesh run stops early, rates are marked unavailable (`NaN`)
 
+`cli.run_manifold_lsrk_convergence` visible parameters:
+
+- `--mesh-levels 2,4,8,...`
+- `--tf FLOAT`, `--cfl FLOAT`
+- `--field-case {gaussian,constant}`
+- `--constant-value FLOAT`
+- `--flux-type {upwind,central,lax_friedrichs}`
+- `--alpha-lf FLOAT`
+- `--gaussian-width FLOAT`
+- `--center-xyz X,Y,Z`
+- `--initial-preset {custom,equator,equator_x,equator_y,north_pole,south_pole}`
+- `--use-numba`
+
+This manifold time-stepping CLI now writes both final summary outputs and time-history outputs:
+
+- final summary CSV / PNG for the selected field case
+- per-step error-vs-time CSV / PNG for the selected field case
+- per-step mass-drift PNG for the selected field case, plotted as `|mass error|` on a log scale
+- `gaussian` compares against the exact transported Gaussian
+- `constant` reports drift from the initial constant field
+- `initial-preset` selects a convenience Gaussian starting location; `center-xyz` is used when `initial-preset=custom`
+- When `initial-preset=custom`, `center-xyz` is normalized onto the sphere radius `R`.
+- `flux-type=lax_friedrichs` uses the LF penalty with `alpha-lf` as the dissipation scale and a smaller CFL timestep.
+
+LF example:
+
+```bash
+python -m cli.run_manifold_lsrk_convergence --mesh-levels 2,4,8 --tf 6.28 --cfl 1.0 --field-case gaussian --flux-type lax_friedrichs --alpha-lf 1.5
+```
+
 Outputs for the plot command now include:
 
-- `<stem>.csv`: time-history series (`time`, `L2_error`, `Linf_error`, `max_abs_q`) per mesh level
+- `<stem>.csv`: time-history series (`time`, `L2_error`, `Linf_error`, `mass`, `mass_error`, `mass_rel_error`, `max_abs_q`) per mesh level
 - `<stem>_convergence_summary.csv`: one row per mesh level with final errors and `rate_L2` / `rate_Linf`
 
 When `cli.run_lsrk_h_convergence` is launched with `--time-cli`, outputs additionally include:
@@ -298,8 +332,26 @@ Canonical grouped directories:
 - `experiments_outputs/div_h_convergence/`
 - `experiments_outputs/rhs_exchange_benchmark/`
 - `experiments_outputs/lsrk_h_convergence/`
+- `experiments_outputs/manifold_div_h_convergence/`
+- `experiments_outputs/manifold_lsrk_convergence/`
 - `experiments_outputs/lsrk_error_vs_time/`
 - `experiments_outputs/scratch/`
+
+Manifold LSRK outputs are field-specific and use stems like:
+
+- `experiments_outputs/manifold_lsrk_convergence/manifold_lsrk_convergence_table1_k4_gaussian_cx1_cy0_cz0.csv`
+- `experiments_outputs/manifold_lsrk_convergence/manifold_lsrk_convergence_table1_k4_gaussian_cx1_cy0_cz0.png`
+- `experiments_outputs/manifold_lsrk_convergence/manifold_lsrk_error_vs_time_table1_k4_gaussian_cx1_cy0_cz0.csv`
+- `experiments_outputs/manifold_lsrk_convergence/manifold_lsrk_error_vs_time_table1_k4_gaussian_cx1_cy0_cz0.png`
+- `experiments_outputs/manifold_lsrk_convergence/manifold_lsrk_mass_error_vs_time_table1_k4_gaussian_cx1_cy0_cz0.png`
+- `experiments_outputs/manifold_lsrk_convergence/manifold_lsrk_convergence_table1_k4_gaussian_north_pole.csv`
+- `experiments_outputs/manifold_lsrk_convergence/manifold_lsrk_convergence_table1_k4_constant_v1.csv`
+- `experiments_outputs/manifold_lsrk_convergence/manifold_lsrk_error_vs_time_table1_k4_constant_v1.png`
+- `experiments_outputs/manifold_lsrk_convergence/manifold_lsrk_mass_error_vs_time_table1_k4_constant_v1.png`
+
+The step-based notebook for manual snapshot inspection is:
+
+- `Manifold_LSRK_3D_Snapshots.ipynb`
 
 Sphere / SDG demo diagnostics write under `outputs/`, separate from canonical CLI outputs.
 Current directories include:
@@ -347,7 +399,9 @@ Implemented:
 - pole-stable SDG `A^{-1}` formulas and seam-connectivity diagnostics
 - flattened divergence diagnostics for sphere-advection experiments
 - exchange-based split-form RHS building blocks
+- Table1 k=4 3D manifold sphere divergence and LSRK time-stepping studies
 - LSRK experiment workflows and visualization demos
+- Step-based manifold snapshot notebook and field-selectable manifold time histories
 
 目前已實作：
 
@@ -358,7 +412,9 @@ Implemented:
 - pole-stable SDG `A^{-1}` 公式與 seam connectivity 診斷
 - sphere advection 的 flattened divergence 診斷
 - exchange-based split-form RHS 元件
+- Table1 k=4 的 3D manifold sphere divergence 與 LSRK 時間步進實驗
 - LSRK 實驗流程與視覺化範例
+- step-based 的 manifold snapshot notebook 與可選初始場的 manifold 時間歷程
 
 Still evolving:
 
