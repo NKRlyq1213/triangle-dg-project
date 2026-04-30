@@ -12,10 +12,15 @@ from operators.manifold_rhs import (
     build_manifold_table1_k4_reference_operators,
     build_manifold_vmaps,
     manifold_rhs_exchange,
+    manifold_rhs_mass_residual,
+    manifold_single_edge_flux_sides,
+    manifold_surface_term_single_edge,
     manifold_surface_term,
     manifold_surface_term_from_exchange,
     pair_manifold_face_traces,
 )
+from operators.exchange import unique_interior_face_pairs
+from operators.exchange import evaluate_all_face_values
 from problems.sphere_advection import gaussian_bell_xyz, solid_body_velocity_xyz
 from experiments.manifold_lsrk_convergence import (
     ManifoldLSRKConvergenceConfig,
@@ -125,6 +130,91 @@ def test_constant_rhs_exchange_matches_free_stream_diagnostic():
 
     assert np.max(np.abs(surface)) < 1.0e-14
     assert np.all(np.isfinite(rhs))
+
+
+@pytest.mark.parametrize("n_div", [2, 4, 8])
+def test_constant_field_mass_rhs_residual_is_near_roundoff(n_div: int):
+    ref_ops, _, _, geom, U, V, W, cache = _fixture(n_div=n_div)
+    q = np.ones_like(geom.X)
+
+    rhs_old = manifold_rhs_exchange(
+        q,
+        geom,
+        (U, V, W),
+        cache,
+        ref_ops=ref_ops,
+        flux_type="upwind",
+        volume_form="split",
+        surface_assembly="local_side",
+        use_numba=False,
+    )
+    rhs_new = manifold_rhs_exchange(
+        q,
+        geom,
+        (U, V, W),
+        cache,
+        ref_ops=ref_ops,
+        flux_type="upwind",
+        volume_form="conservative",
+        surface_assembly="single_edge",
+        use_numba=False,
+    )
+
+    old_res = abs(manifold_rhs_mass_residual(rhs_old, geom, ref_ops.weights_2d))
+    new_res = abs(manifold_rhs_mass_residual(rhs_new, geom, ref_ops.weights_2d))
+
+    assert old_res < 1.0e-18
+    assert new_res < 1.0e-18
+
+
+@pytest.mark.parametrize("flux_type", ["central", "upwind"])
+def test_single_edge_flux_is_antisymmetric_on_interior_faces(flux_type: str):
+    ref_ops, _, _, geom, U, V, W, cache = _fixture(n_div=2)
+    q = np.random.default_rng(7).normal(size=geom.X.shape)
+    q_face = evaluate_all_face_values(q, cache.trace, use_numba=False)
+    Fhat_side, _ = manifold_single_edge_flux_sides(
+        q_face=q_face,
+        J_face=cache.J_face,
+        u_face=cache.u_tilde_face,
+        v_face=cache.v_tilde_face,
+        exchange_cache=cache,
+        flux_type=flux_type,
+        alpha_lf=1.0,
+    )
+    pairs = unique_interior_face_pairs(cache.conn)
+    for km, fm, kp, fp in pairs:
+        jm = fm - 1
+        jp = fp - 1
+        minus_side = Fhat_side[km, jm, :]
+        plus_side = Fhat_side[kp, jp, :]
+        if cache.conn["face_flip"][km, jm]:
+            plus_side = plus_side[::-1]
+        assert np.allclose(minus_side + plus_side, 0.0, atol=1.0e-13, rtol=0.0)
+
+    # also ensure the assembled single-edge surface term is finite
+    surface = manifold_surface_term_single_edge(
+        q, geom, (U, V, W), ref_ops, cache, flux_type=flux_type, use_numba=False
+    )
+    assert np.all(np.isfinite(surface))
+
+
+@pytest.mark.parametrize("flux_type", ["central", "upwind"])
+def test_mass_residual_improves_for_conservative_single_edge(flux_type: str):
+    ref_ops, _, _, geom, U, V, W, cache = _fixture(n_div=2)
+    q_const = np.ones_like(geom.X)
+    q_smooth = gaussian_bell_xyz(geom.X, geom.Y, geom.Z, R=1.0, center_xyz=(1.0, 0.0, 0.0))
+    for q in (q_const, q_smooth):
+        rhs_old = manifold_rhs_exchange(
+            q, geom, (U, V, W), cache, ref_ops=ref_ops, flux_type=flux_type,
+            volume_form="split", surface_assembly="local_side", use_numba=False
+        )
+        rhs_new = manifold_rhs_exchange(
+            q, geom, (U, V, W), cache, ref_ops=ref_ops, flux_type=flux_type,
+            volume_form="conservative", surface_assembly="single_edge", use_numba=False
+        )
+        old_res = abs(manifold_rhs_mass_residual(rhs_old, geom, ref_ops.weights_2d))
+        new_res = abs(manifold_rhs_mass_residual(rhs_new, geom, ref_ops.weights_2d))
+        assert new_res <= old_res + 1.0e-12
 
 
 def test_short_manifold_lsrk_errors_decrease_under_refinement():

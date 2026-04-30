@@ -115,6 +115,8 @@ def main() -> None:
         default="upwind",
     )
     parser.add_argument("--alpha-lf", type=float, default=1.0)
+    parser.add_argument("--volume-form", choices=("split", "conservative"), default="split")
+    parser.add_argument("--surface-assembly", choices=("local_side", "single_edge"), default="local_side")
     parser.add_argument("--constant-value", type=float, default=1.0)
     parser.add_argument("--use-numba", action="store_true")
     args = parser.parse_args()
@@ -133,6 +135,8 @@ def main() -> None:
         field_case=args.field_case,
         flux_type=args.flux_type,
         alpha_lf=args.alpha_lf,
+        volume_form=args.volume_form,
+        surface_assembly=args.surface_assembly,
         constant_value=args.constant_value,
         record_history=True,
         verbose=True,

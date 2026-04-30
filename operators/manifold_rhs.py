@@ -7,7 +7,7 @@ import numpy as np
 from data.table1_rules import load_table1_rule
 from geometry.connectivity import build_face_connectivity
 from geometry.sphere_manifold_metrics import ManifoldGeometryCache
-from operators.exchange import evaluate_all_face_values, pair_face_traces
+from operators.exchange import evaluate_all_face_values, pair_face_traces, unique_interior_face_pairs
 from operators.sdg_flattened_divergence import build_table1_reference_diff_operators
 from operators.trace_policy import build_trace_policy
 from operators.vandermonde2d import vandermonde2d
@@ -19,7 +19,10 @@ try:
     prange = getattr(_numba, 'prange', range)
     _NUMBA_AVAILABLE = True
 except Exception:  # pragma: no cover
-    njit = lambda cache: lambda f: f
+    def njit(*args, **kwargs):
+        def _wrap(func):
+            return func
+        return _wrap
     prange = range
     _NUMBA_AVAILABLE = False
 
@@ -30,6 +33,8 @@ def _should_use_numba(use_numba: bool | None) -> bool:
 
 
 _VALID_FLUX_TYPES = {"upwind", "central", "lax_friedrichs"}
+_VALID_VOLUME_FORMS = {"split", "conservative"}
+_VALID_SURFACE_ASSEMBLIES = {"local_side", "single_edge"}
 
 
 def _normalize_flux_type(flux_type: str) -> str:
@@ -37,6 +42,20 @@ def _normalize_flux_type(flux_type: str) -> str:
     if flux not in _VALID_FLUX_TYPES:
         raise ValueError("flux_type must be 'upwind', 'central', or 'lax_friedrichs'.")
     return flux
+
+
+def _normalize_volume_form(volume_form: str) -> str:
+    form = str(volume_form).strip().lower()
+    if form not in _VALID_VOLUME_FORMS:
+        raise ValueError("volume_form must be 'split' or 'conservative'.")
+    return form
+
+
+def _normalize_surface_assembly(surface_assembly: str) -> str:
+    assembly = str(surface_assembly).strip().lower()
+    if assembly not in _VALID_SURFACE_ASSEMBLIES:
+        raise ValueError("surface_assembly must be 'local_side' or 'single_edge'.")
+    return assembly
 
 
 def _apply_reference_operator(D: np.ndarray, u: np.ndarray) -> np.ndarray:
@@ -390,6 +409,24 @@ def manifold_volume_divergence(
     return 0.5 * (term1 + term2 + term3)
 
 
+def manifold_volume_divergence_conservative(
+    q: np.ndarray,
+    geom: ManifoldGeometryCache,
+    U: np.ndarray,
+    V: np.ndarray,
+    W: np.ndarray,
+    Dr: np.ndarray,
+    Ds: np.ndarray,
+) -> np.ndarray:
+    q = np.asarray(q, dtype=float)
+    if q.shape != geom.X.shape:
+        raise ValueError("q must match geometry nodal shape.")
+    u_tilde, v_tilde = manifold_contravariant_velocity(geom, U, V, W)
+    Fr = geom.J * u_tilde * q
+    Fs = geom.J * v_tilde * q
+    return (_apply_reference_operator(Dr, Fr) + _apply_reference_operator(Ds, Fs)) / geom.J
+
+
 def manifold_surface_term(
     q: np.ndarray,
     geom: ManifoldGeometryCache,
@@ -596,6 +633,110 @@ def manifold_surface_term_from_exchange(
     return (ref_ops.lift @ surface_integral).T / geom.J
 
 
+def manifold_surface_term_single_edge(
+    q: np.ndarray,
+    geom: ManifoldGeometryCache,
+    velocity_xyz,
+    ref_ops: ManifoldReferenceOperators,
+    exchange_cache: ManifoldExchangeCache,
+    flux_type: str = "upwind",
+    alpha_lf: float = 1.0,
+    t: float = 0.0,
+    use_numba: bool | None = None,
+) -> np.ndarray:
+    q = np.asarray(q, dtype=float)
+    if q.shape != geom.X.shape:
+        raise ValueError("q must match geometry nodal shape.")
+    flux_type = _normalize_flux_type(flux_type)
+
+    if (
+        exchange_cache.J_face is not None
+        and exchange_cache.u_tilde_face is not None
+        and exchange_cache.v_tilde_face is not None
+    ):
+        J_face = exchange_cache.J_face
+        u_face = exchange_cache.u_tilde_face
+        v_face = exchange_cache.v_tilde_face
+    else:
+        U, V, W = _resolve_velocity_xyz(velocity_xyz, geom, t=t)
+        u_tilde, v_tilde = manifold_contravariant_velocity(geom, U, V, W)
+        J_face = _evaluate_face_values(geom.J, exchange_cache.trace, use_numba=use_numba)
+        u_face = _evaluate_face_values(u_tilde, exchange_cache.trace, use_numba=use_numba)
+        v_face = _evaluate_face_values(v_tilde, exchange_cache.trace, use_numba=use_numba)
+
+    q_face = _evaluate_face_values(q, exchange_cache.trace, use_numba=use_numba)
+    Fn_loc = (exchange_cache.nr * J_face * u_face + exchange_cache.ns * J_face * v_face) * q_face
+    Fhat_side, _ = manifold_single_edge_flux_sides(
+        q_face=q_face,
+        J_face=J_face,
+        u_face=u_face,
+        v_face=v_face,
+        exchange_cache=exchange_cache,
+        flux_type=flux_type,
+        alpha_lf=alpha_lf,
+    )
+    nfp = int(exchange_cache.trace["nfp"])
+    G = Fn_loc - Fhat_side
+    scaled = G * exchange_cache.face_weights
+    scaled_penalty = scaled.transpose(1, 2, 0).reshape(3 * nfp, q.shape[0])
+    surface_integral = ref_ops.face_extraction.T @ scaled_penalty
+    return (ref_ops.lift @ surface_integral).T / geom.J
+
+
+def manifold_single_edge_flux_sides(
+    q_face: np.ndarray,
+    J_face: np.ndarray,
+    u_face: np.ndarray,
+    v_face: np.ndarray,
+    exchange_cache: ManifoldExchangeCache,
+    flux_type: str = "upwind",
+    alpha_lf: float = 1.0,
+) -> tuple[np.ndarray, float]:
+    flux_type = _normalize_flux_type(flux_type)
+    Fhat_side = np.zeros_like(q_face)
+    EToE = np.asarray(exchange_cache.conn["EToE"], dtype=int)
+    EToF = np.asarray(exchange_cache.conn["EToF"], dtype=int)
+    face_flip = np.asarray(exchange_cache.conn["face_flip"], dtype=bool)
+    pairs = unique_interior_face_pairs(exchange_cache.conn)
+    edge_data: list[tuple[int, int, int, int, bool, np.ndarray, np.ndarray, np.ndarray]] = []
+    lf_speed = 0.0
+    for km, fm, kp, fp in pairs:
+        jm = fm - 1
+        jp = fp - 1
+        q_m = q_face[km, jm, :]
+        q_p = q_face[kp, jp, :]
+        a_m = J_face[km, jm, :] * (
+            exchange_cache.nr[km, jm, :] * u_face[km, jm, :]
+            + exchange_cache.ns[km, jm, :] * v_face[km, jm, :]
+        )
+        a_p = J_face[kp, jp, :] * (
+            exchange_cache.nr[kp, jp, :] * u_face[kp, jp, :]
+            + exchange_cache.ns[kp, jp, :] * v_face[kp, jp, :]
+        )
+        flip = bool(face_flip[km, jm])
+        if int(EToE[km, jm]) != kp or int(EToF[km, jm]) - 1 != jp:
+            raise ValueError("Connectivity mismatch while assembling single-edge manifold flux.")
+        if flip:
+            q_p = q_p[::-1]
+            a_p = a_p[::-1]
+        a_edge = 0.5 * (a_m - a_p)
+        lf_speed = max(lf_speed, float(np.max(np.abs(a_edge))))
+        edge_data.append((km, jm, kp, jp, flip, q_m, q_p, a_edge))
+
+    for km, jm, kp, jp, flip, q_m, q_p, a_edge in edge_data:
+        Fhat = 0.5 * a_edge * (q_m + q_p)
+        if flux_type == "upwind":
+            Fhat = Fhat - 0.5 * alpha_lf * np.abs(a_edge) * (q_p - q_m)
+        elif flux_type == "lax_friedrichs":
+            Fhat = Fhat - 0.5 * alpha_lf * lf_speed * (q_p - q_m)
+        Fhat_side[km, jm, :] = Fhat
+        if flip:
+            Fhat_side[kp, jp, ::-1] = -Fhat
+        else:
+            Fhat_side[kp, jp, :] = -Fhat
+    return Fhat_side, lf_speed
+
+
 def manifold_rhs(
     q: np.ndarray,
     geom: ManifoldGeometryCache,
@@ -640,6 +781,8 @@ def manifold_rhs_exchange(
     ref_ops: ManifoldReferenceOperators | None = None,
     flux_type: str = "upwind",
     alpha_lf: float = 1.0,
+    volume_form: str = "split",
+    surface_assembly: str = "local_side",
     t: float = 0.0,
     use_numba: bool | None = None,
 ) -> np.ndarray:
@@ -650,27 +793,33 @@ def manifold_rhs_exchange(
         ref_ops = build_manifold_table1_k4_reference_operators()
 
     U, V, W = _resolve_velocity_xyz(velocity_xyz, geom, t=t)
-    div = manifold_volume_divergence(
-        q=q,
-        geom=geom,
-        U=U,
-        V=V,
-        W=W,
-        Dr=ref_ops.Dr,
-        Ds=ref_ops.Ds,
-    )
-    surface = manifold_surface_term_from_exchange(
-        q=q,
-        geom=geom,
-        velocity_xyz=(U, V, W),
-        ref_ops=ref_ops,
-        exchange_cache=exchange_cache,
-        flux_type=flux_type,
-        alpha_lf=alpha_lf,
-        t=t,
-        use_numba=use_numba,
-    )
+    volume_form = _normalize_volume_form(volume_form)
+    surface_assembly = _normalize_surface_assembly(surface_assembly)
+    if volume_form == "split":
+        div = manifold_volume_divergence(
+            q=q, geom=geom, U=U, V=V, W=W, Dr=ref_ops.Dr, Ds=ref_ops.Ds, use_numba=use_numba
+        )
+    else:
+        div = manifold_volume_divergence_conservative(
+            q=q, geom=geom, U=U, V=V, W=W, Dr=ref_ops.Dr, Ds=ref_ops.Ds
+        )
+    if surface_assembly == "local_side":
+        surface = manifold_surface_term_from_exchange(
+            q=q, geom=geom, velocity_xyz=(U, V, W), ref_ops=ref_ops, exchange_cache=exchange_cache,
+            flux_type=flux_type, alpha_lf=alpha_lf, t=t, use_numba=use_numba
+        )
+    else:
+        surface = manifold_surface_term_single_edge(
+            q=q, geom=geom, velocity_xyz=(U, V, W), ref_ops=ref_ops, exchange_cache=exchange_cache,
+            flux_type=flux_type, alpha_lf=alpha_lf, t=t, use_numba=use_numba
+        )
     return -div + surface
+
+
+def manifold_rhs_mass_residual(rhs: np.ndarray, geom: ManifoldGeometryCache, weights: np.ndarray) -> float:
+    rhs = np.asarray(rhs, dtype=float)
+    w = np.asarray(weights, dtype=float).reshape(1, -1)
+    return float(np.sum(w * geom.J * rhs))
 
 
 def manifold_rhs_constant_field(

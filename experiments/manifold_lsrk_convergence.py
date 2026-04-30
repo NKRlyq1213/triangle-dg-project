@@ -43,6 +43,8 @@ _VALID_INITIAL_PRESETS = {
     "south_pole",
 }
 _VALID_FLUX_TYPES = {"upwind", "central", "lax_friedrichs"}
+_VALID_VOLUME_FORMS = {"split", "conservative"}
+_VALID_SURFACE_ASSEMBLIES = {"local_side", "single_edge"}
 
 
 @dataclass(frozen=True)
@@ -61,6 +63,8 @@ class ManifoldLSRKConvergenceConfig:
     constant_value: float = 1.0
     flux_type: str = "upwind"
     alpha_lf: float = 1.0
+    volume_form: str = "split"
+    surface_assembly: str = "local_side"
     use_numba: bool | None = True
     record_history: bool = False
     record_step_snapshots: bool = False
@@ -84,6 +88,8 @@ def _validate_config(config: ManifoldLSRKConvergenceConfig) -> None:
     if config.gaussian_width <= 0.0:
         raise ValueError("gaussian_width must be positive.")
     flux_type = _normalize_flux_type(config.flux_type)
+    volume_form = _normalize_volume_form(config.volume_form)
+    surface_assembly = _normalize_surface_assembly(config.surface_assembly)
     center_xyz = np.asarray(config.center_xyz, dtype=float).reshape(-1)
     if center_xyz.shape != (3,):
         raise ValueError("center_xyz must contain exactly three values.")
@@ -105,6 +111,8 @@ def _validate_config(config: ManifoldLSRKConvergenceConfig) -> None:
         raise ValueError("alpha_lf must be positive.")
     if flux_type == "lax_friedrichs" and config.alpha_lf < 1.0:
         raise ValueError("alpha_lf must be at least 1.0 for lax_friedrichs flux.")
+    if volume_form == "conservative" and surface_assembly == "local_side":
+        pass
     for t_snap in config.snapshot_times:
         if float(t_snap) < 0.0 or float(t_snap) > float(config.tf):
             raise ValueError("snapshot_times must satisfy 0 <= t <= tf.")
@@ -119,6 +127,20 @@ def _normalize_flux_type(flux_type: str) -> str:
     if flux not in _VALID_FLUX_TYPES:
         raise ValueError("flux_type must be one of: upwind, central, lax_friedrichs.")
     return flux
+
+
+def _normalize_volume_form(volume_form: str) -> str:
+    val = str(volume_form).strip().lower()
+    if val not in _VALID_VOLUME_FORMS:
+        raise ValueError("volume_form must be one of: split, conservative.")
+    return val
+
+
+def _normalize_surface_assembly(surface_assembly: str) -> str:
+    val = str(surface_assembly).strip().lower()
+    if val not in _VALID_SURFACE_ASSEMBLIES:
+        raise ValueError("surface_assembly must be one of: local_side, single_edge.")
+    return val
 
 
 def _normalize_snapshot_times(snapshot_times: tuple[float, ...]) -> tuple[float, ...]:
@@ -372,6 +394,8 @@ def _run_one_level(
             ref_ops=ref_ops,
             flux_type=_normalize_flux_type(config.flux_type),
             alpha_lf=config.alpha_lf,
+            volume_form=_normalize_volume_form(config.volume_form),
+            surface_assembly=_normalize_surface_assembly(config.surface_assembly),
             t=t,
             use_numba=config.use_numba,
         )
