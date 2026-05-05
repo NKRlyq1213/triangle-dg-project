@@ -30,3 +30,16 @@ desktop.ini
 # *.jpg
 # *.jpeg
 # *.pdf
+# Generated experiment outputs
+outputs/
+# Python cache
+*.pyc
+# Numba cache
+*.nbc
+*.nbi
+.numba_cache/
+# LaTeX build artifacts
+*.aux
+*.out
+*.toc
+*.synctex.gz

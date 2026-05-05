@@ -1,0 +1,1014 @@
+
+% !TEX program = xelatex
+% SDG Equal-Area Sphere Closure Report
+% 繁體中文 LaTeX 版本
+\documentclass[UTF8,12pt,a4paper]{ctexart}
+
+\usepackage[a4paper,margin=2.4cm]{geometry}
+\usepackage{amsmath,amssymb,mathtools,bm}
+\usepackage{booktabs,longtable,array}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{caption}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!60!black,
+  urlcolor=blue!60!black,
+  citecolor=blue!60!black
+}
+
+\lstdefinestyle{repo}{
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  frame=single,
+  columns=fullflexible,
+  keepspaces=true,
+  backgroundcolor=\color{gray!6}
+}
+
+\setlist[itemize]{leftmargin=2em}
+\setlist[enumerate]{leftmargin=2em}
+
+\title{\textbf{Equal-Area SDG on Sphere 結案報告}\\
+\large 極點／Patch Corner 奇異性、等面積投影、守恆性與 Free-Stream Preservation}
+\author{專題研究紀錄}
+\date{2026-05-05}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+本報告整理本階段針對球面上 Equal-Area SDG 方法所做的設計、實驗、失敗路線排除與最終候選方案。核心問題是原本透過 $A^{-1}$ 進行速度轉換時，在極點或 octahedral patch corner 附近會產生方向不唯一與 numerical divergence 異常。最後採用 stream-function area flux、sphere seam connectivity、edge-streamfunction surface flux、projected surface lifting、global mass correction，以及 Numba fast RHS。此版本已通過質量守恆與 constant-state preservation；短時間 advection convergence 可達高階；但長時間 solid-body rotation 測試約退化到二階上下，推測與 octahedral equal-area map 的 patch corner regularity 與 face-volume flux consistency 有關。
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+\section{核心結論}
+
+本階段已完成一套可工作的候選方案：
+\[
+\boxed{
+\text{Equal-area map}
++
+\text{stream-function area flux}
++
+\text{sphere seam connectivity}
++
+\text{edge-streamfunction surface flux}
++
+\text{global mass correction}
++
+\text{Numba fast RHS}
+}
+\]
+
+最終推薦的 RHS 結構為
+\[
+R(q)
+=
+R_{\rm raw}(q)
+-
+\frac{\int_{S^2} R_{\rm raw}(q)\,dS}
+{\int_{S^2}1\,dS},
+\]
+其中
+\[
+R_{\rm raw}
+=
+-\frac{1}{J}
+\left[
+\partial_x(F^x q)+\partial_y(F^y q)
+\right]
++
+\frac{1}{J}
+M^{-1}
+\int_{\partial K}
+(f-\hat f)\phi\,ds.
+\]
+
+face normal speed 不直接使用兩側各自的 $n\cdot F$，而是由 edge streamfunction trace 給出：
+\[
+a=F\cdot n=-\partial_s\psi.
+\]
+
+這一版已通過：
+\begin{enumerate}
+  \item \textbf{constant-state preservation}：
+  \[
+  q=1 \Rightarrow RHS \approx 0.
+  \]
+  \item \textbf{closed-sphere global mass conservation}：
+  \[
+  \frac{d}{dt}\int_{S^2}q\,dS\approx0.
+  \]
+  \item \textbf{sphere seam pairing}：使用 $(X,Y,Z)$ embedding 配對 seam，避免重新引入 $(\lambda,\theta)$ 或 $A^{-1}$ 極點方向不唯一問題。
+  \item \textbf{short-time accuracy}：$T=0.1$ Gaussian advection 可觀察到接近四階的 $L^2$ 收斂。
+  \item \textbf{工程效能}：Numba fast RHS 與 reference RHS 數值一致，且 RHS benchmark 有約 $40\times$ 至 $120\times$ 加速。
+\end{enumerate}
+
+目前尚未完全解決的是
+\[
+\boxed{
+\text{long-time solid-body rotation accuracy 約退化到二階上下。}
+}
+\]
+目前 evidence 顯示這不是 CFL 或 time integration 問題，而是 spatial consistency、seam / patch corner regularity，或 volume-face flux mismatch 長時間累積所造成。
+
+\section{原始問題與研究目標}
+
+\subsection{原始問題}
+
+一開始的主要問題是：
+\begin{enumerate}
+  \item 需要使用 $A$、$A^{-1}$ 進行球體與八面體 / 平面 patch 間的映射與反映射。
+  \item 在極點或 patch corner 附近，反映射可能需要從多個 face 取值，導致極限方向不唯一。
+  \item 原本以 $A^{-1}$ 或 velocity transform 得到的速度場，在 $\alpha_0=\pi/4$ 時，divergence diagnostic 不像 $\alpha_0=0$ 那樣漂亮。
+  \item 仍然希望保留 \textbf{equal-area mapping}，避免面積權重複雜化或質量積分不自然。
+\end{enumerate}
+
+\subsection{本階段目標}
+
+本階段目標可拆成五個：
+\begin{enumerate}
+  \item 消除 $A^{-1}$ 在極點 / corner 的方向不唯一問題。
+  \item 保留 equal-area formulation。
+  \item 建立 divergence-free 或 free-stream-preserving 的 velocity / flux 表示。
+  \item 建立 closed sphere 上的 conservative DG surface coupling。
+  \item 進入可跑 convergence test 的 fast implementation。
+\end{enumerate}
+
+\section{第一階段：放棄 $A^{-1}$ Velocity，改用 Stream-Function Area Flux}
+
+\subsection{核心想法}
+
+不再用 $A^{-1}$ 直接把球面速度轉到 flat coordinates，而是使用 stream function：
+\[
+\psi=-R\,\Omega\cdot X.
+\]
+
+在 flat equal-area coordinates 中定義 area flux：
+\[
+F^x=-\psi_y,\qquad F^y=\psi_x.
+\]
+
+這樣
+\[
+\partial_xF^x+\partial_yF^y
+=
+-\psi_{yx}+\psi_{xy}
+\approx0.
+\]
+
+因此 divergence-free property 來自 curl form，而不是來自不穩定的 $A^{-1}$ velocity transform。
+
+\subsection{已驗證結果}
+
+先前 diagnostic 顯示：
+\begin{itemize}
+  \item \texttt{L2\_stream} 對所有 $\alpha_0$ 都接近 roundoff。
+  \item 相較之下，\texttt{L2\_Ainv} 在 $\alpha_0\neq0$ 時約 $10^{-1}$ 等級。
+  \item 對 constant volume RHS：
+  \[
+  RHS\approx0.
+  \]
+  \item full RHS constant-state check 初步通過。
+\end{itemize}
+
+\subsection{判斷}
+
+\[
+\boxed{
+\text{stream-function area flux 能解決 }\alpha_0=\pi/4\text{ 的 divergence 問題。}
+}
+\]
+
+\section{第二階段：Projected Surface Lifting}
+
+\subsection{問題}
+
+repo 原本 surface term 有 diagonal lifting 與 projected lifting 兩種可能。為了和 SDG / Table1 quadrature 一致，正式方向應採用 projected inverse mass。
+
+一開始嘗試使用 square Vandermonde 假設：
+\[
+M^{-1}=VV^T.
+\]
+
+但 Table1 order 4, $N=4$ 時：
+\[
+V.shape=(22,15).
+\]
+
+也就是 quadrature / sampling nodes 有 $22$ 個，而 polynomial modes 有 $15$ 個，所以不是 square interpolation system。
+
+\subsection{修正公式}
+
+改用 weighted projection mass：
+\[
+M=A V^T W V.
+\]
+
+projected inverse-mass operator：
+\[
+P
+=
+V M^{-1}(A V^T).
+\]
+
+實作上避免顯式 inverse：
+\[
+X=M^{-1}(A V^T),
+\qquad
+P=VX.
+\]
+
+repo lifting convention 是 right multiplication，所以使用
+\[
+P^T.
+\]
+
+\subsection{已驗證結果}
+
+\begin{itemize}
+  \item constant field：surface projected lifting 不破壞常數。
+  \item \texttt{sphere\_z}：由於跨 element 連續，surface jump 幾乎為 $0$。
+  \item \texttt{element\_jump} / \texttt{element\_checker}：surface penalty 被真正啟動，且 projected 與 diagonal lifting 明顯不同。
+\end{itemize}
+
+\subsection{判斷}
+
+\[
+\boxed{
+\text{projected surface lifting 正常。}
+}
+\]
+但後續發現，單純 projected lifting 不是守恆問題的根源。
+
+\section{第三階段：Strong Correction Surface 與 Direct Numerical Flux Surface}
+
+\subsection{初始 Strong Correction 問題}
+
+原本 surface correction 使用
+\[
+R_{\rm surf}^{strong}
+=
+\frac{1}{J}
+M^{-1}
+\int_{\partial K}
+(f-\hat f)\phi\,ds.
+\]
+
+對 discontinuous field，global mass residual 在 $\alpha_0\neq0$ 時有 $10^{-4}$ 至 $10^{-3}$ 等級。
+
+boundary flux balance diagnostic 顯示：
+\begin{itemize}
+  \item 非零 mass residual 主要來自 surface term。
+  \item 不是 flat open boundary flux 造成。
+\end{itemize}
+
+\subsection{Direct Numerical Flux 嘗試}
+
+嘗試改成
+\[
+R_{\rm surf}^{direct}
+=
+-\frac{1}{J}
+M^{-1}
+\int_{\partial K}
+\hat f\phi\,ds.
+\]
+
+第一版 local-side direct flux 失敗，因為同一條 face 兩側各自算的 $\hat f$ 不滿足
+\[
+\hat f^-+\hat f^+\approx0.
+\]
+
+\texttt{pairErr} 在 $\alpha_0\neq0$ 時約 $10^{-1}$。
+
+\subsection{Pairwise Single-Edge Common Flux}
+
+修正為每條 interior / seam face 只算一次 common flux，再以相反符號分配給左右兩側：
+\[
+\hat f^-=\hat f,\qquad
+\hat f^+=-\hat f.
+\]
+
+此後：
+\[
+\texttt{pairErr}=0.
+\]
+
+global conservation balance 通過。
+
+\subsection{Direct Flux 的新問題}
+
+direct numerical flux surface 雖然保住 global mass conservation，但 LSRK constant test 失敗：
+\begin{itemize}
+  \item 初始 \texttt{rhsM0} 很小。
+  \item 但時間推進後 \texttt{massDrift} 與 stage residual 變大。
+  \item $q=1$ 被推離常數場。
+\end{itemize}
+
+原因是
+\[
+R_{\rm surf}^{direct}
+=
+-\frac{1}{J}M^{-1}\int\hat f\phi\,ds
+\]
+本身不保證 pointwise free-stream preservation。
+
+\subsection{結論}
+
+\[
+\boxed{
+\text{direct numerical flux surface 不適合作為正式 RHS。}
+}
+\]
+它適合測 conservation，但不適合保持 $q=1$。
+
+\section{第四階段：Sphere Seam Connectivity}
+
+\subsection{核心做法}
+
+flat-square boundary 不再使用 \texttt{same\_state}，而是用球面 embedding $(X,Y,Z)$ 對 boundary faces 進行配對：
+\[
+\mathbf X^- \approx \mathbf X^+.
+\]
+
+這避免使用 $\lambda,\theta$ 或 $A^{-1}$，因此不會引入極點方向不唯一問題。
+
+\subsection{驗證結果}
+
+所有測試中：
+\[
+\texttt{unmatch}=0,
+\]
+\[
+\texttt{seamErr}\sim10^{-16}.
+\]
+
+pairwise flux：
+\[
+\texttt{pairErr}=0.
+\]
+
+closed-sphere mass balance：
+\[
+I_{\rm full}\approx10^{-14}\sim10^{-12}.
+\]
+
+\subsection{判斷}
+
+\[
+\boxed{
+\text{sphere seam connectivity 成功。}
+}
+\]
+
+這是整個方案的重要里程碑。
+
+\section{第五階段：Edge-Streamfunction Surface Flux}
+
+\subsection{問題}
+
+direct surface flux 不保 constant state。因此改回 strong correction：
+\[
+f-\hat f,
+\]
+但 face normal flux 不再使用 local $n\cdot F$，而是由 edge streamfunction trace 給出：
+\[
+a=F\cdot n=-\partial_s\psi.
+\]
+
+\subsection{RHS 結構}
+
+surface penalty：
+\[
+p=f-\hat f.
+\]
+
+其中：
+\[
+f=aq.
+\]
+
+$\hat f$ 仍採 pairwise common flux 組裝，確保 conservation。
+
+surface RHS：
+\[
+R_{\rm surf}
+=
+\frac{1}{J}
+M^{-1}
+\int_{\partial K}
+p\phi\,ds.
+\]
+
+\subsection{驗證結果}
+
+此版本通過：
+\begin{itemize}
+  \item \texttt{constant}：
+  \[
+  rhs\_L2\sim10^{-14}\sim10^{-12}.
+  \]
+  \item \texttt{element\_checker} / \texttt{element\_jump}：
+  \[
+  I_{\rm full}\approx0.
+  \]
+  \item \texttt{gaussian}：mass residual 接近 roundoff。
+  \item edge-pair flux error：
+  \[
+  \texttt{edgeErr}\approx10^{-15}\sim10^{-13}.
+  \]
+\end{itemize}
+
+\subsection{判斷}
+
+\[
+\boxed{
+\text{edge-streamfunction surface flux + strong correction 是目前正確 surface formulation。}
+}
+\]
+
+\section{第六階段：Local Correction 與 Global Mass Correction}
+
+\subsection{Local Conservative Correction 嘗試}
+
+為了強制每個 element 的 local mass balance，嘗試：
+\[
+R_K^{corr}
+=
+R_K^{raw}+c_K.
+\]
+
+其中 $c_K$ 使：
+\[
+\int_K R_K^{corr}\,dS
+=
+-\int_{\partial K}\hat f\,ds.
+\]
+
+\subsection{Local Correction 的問題}
+
+對 $q=1$，local correction 的 \texttt{massDrift} 仍為 roundoff，但 \texttt{corrMax} 在 $\alpha_0\neq0$ 時不是 roundoff。
+
+例如 $nsub=16,\alpha_0=\pi/4$：
+\[
+\texttt{corrMax}\approx2.4\times10^{-2}.
+\]
+
+這代表 local correction 會在 element-wise 層級修改 constant field，存在破壞 free-stream 的風險。
+
+\subsection{結論}
+
+\[
+\boxed{
+\text{拒絕 local element-wise correction 作為正式版本。}
+}
+\]
+
+\subsection{Global Mass Correction}
+
+改採全域 correction：
+\[
+R^{corr}
+=
+R^{raw}
+-
+\frac{\int_{S^2}R^{raw}\,dS}
+{\int_{S^2}1\,dS}.
+\]
+
+這只扣掉全域平均 mass residual，不對每個 element 個別加不同常數。
+
+\subsection{驗證結果}
+
+global correction 版本通過：
+\begin{itemize}
+  \item constant-state preservation：
+  \[
+  \texttt{constDev}\sim10^{-14}\sim10^{-13}.
+  \]
+  \item Gaussian / sphere modes mass drift：
+  \[
+  \texttt{massDrift}\approx0.
+  \]
+  \item discontinuous element checker 單步 mass drift：
+  \[
+  10^{-16}\sim10^{-17}.
+  \]
+\end{itemize}
+
+\subsection{判斷}
+
+\[
+\boxed{
+\text{global mass correction 是目前正式候選 correction。}
+}
+\]
+
+\section{第七階段：Numba Fast RHS}
+
+\subsection{加速目標}
+
+最耗時部分：
+\begin{enumerate}
+  \item 每次 RHS 的 face edge flux loop。
+  \item pairwise penalty assembly。
+  \item surface integral accumulation。
+  \item LSRK 五 stage 反覆呼叫 RHS。
+\end{enumerate}
+
+\subsection{加速策略}
+
+保持數學結構不變，只將 surface-related kernels Numba 化：
+\begin{itemize}
+  \item edge-streamfunction normal flux kernel；
+  \item pairwise strong penalty kernel；
+  \item surface integral accumulation kernel；
+  \item global mass residual kernel；
+  \item global correction application kernel。
+\end{itemize}
+
+volume part 仍使用既有 vectorized / matrix operation。
+
+\subsection{Benchmark 結果}
+
+fast RHS 與 reference RHS：
+\[
+\texttt{diff\_L2}\sim10^{-14}\sim10^{-12}.
+\]
+
+mass residual 維持 roundoff。
+
+speedup 約：
+\[
+40\times\sim120\times.
+\]
+
+fast LSRK 也通過：
+\begin{itemize}
+  \item constant：
+  \[
+  \texttt{constDev}\sim10^{-14}.
+  \]
+  \item gaussian：
+  \[
+  \texttt{massDrift}=0.
+  \]
+  \item sphere\_z：
+  \[
+  \texttt{massDrift}\sim10^{-16}.
+  \]
+  \item element\_checker：
+  \[
+  \texttt{massDrift}\sim10^{-17}\sim10^{-16}.
+  \]
+\end{itemize}
+
+\subsection{判斷}
+
+\[
+\boxed{
+\text{Numba fast RHS 可作為後續 convergence test 的預設實作。}
+}
+\]
+
+\section{第八階段：Accuracy / Convergence Test}
+
+\subsection{Exact Solution}
+
+solid-body rotation exact solution：
+\[
+q(X,t)=q_0(R_\Omega(-t)X).
+\]
+
+Gaussian initial state：
+\[
+q_0(X)
+=
+\exp\left(
+-\frac{d(X,X_c)^2}{2\sigma^2}
+\right).
+\]
+
+\subsection{CFL 控制}
+
+repo 使用 CFL formula：
+\[
+dt
+=
+\mathrm{CFL}
+\frac{h}{N^2v_{\max}}.
+\]
+
+本階段改成 CFL-controlled time step：
+\[
+nsteps=
+\left\lceil
+\frac{T}{dt_{\rm nominal}}
+\right\rceil,
+\qquad
+dt=\frac{T}{nsteps}.
+\]
+
+\subsection{短時間結果}
+
+對 $T=0.1$、$\alpha_0=\pi/4$、Gaussian：
+\[
+L^2\text{ rate}\approx4.
+\]
+
+代表：
+\[
+\boxed{
+\text{短時間局部 accuracy 是高階的。}
+}
+\]
+
+\subsection{長時間結果}
+
+對 $T=5.0$：
+\begin{itemize}
+  \item CFL=1.0 與 CFL=0.5 結果幾乎相同。
+  \item 因此 time error 不是主因。
+  \item 長時間 $L^2$ rate 約退化到二階上下。
+\end{itemize}
+
+\subsection{Gaussian Center 測試}
+
+原始 center：
+\[
+X_c=(1,0,0)
+\]
+會靠近 octahedral vertex。
+
+改成：
+\[
+X_c=\frac{(1,1,1)}{\sqrt3}
+\]
+後，$T=5$ 仍然約二階上下。
+
+使用其他 generic center 與 sphere modes 時，也觀察到長時間約二階上下。
+
+\subsection{判斷}
+
+\[
+\boxed{
+\text{長時間 accuracy 退化不是單純 Gaussian center 放在 vertex，也不是 CFL。}
+}
+\]
+
+目前最可能原因是：
+\begin{enumerate}
+  \item seam / patch corner interaction；
+  \item volume-face flux consistency mismatch；
+  \item equal-area octahedral map 在 patch corner 附近的 regularity loss；
+  \item edge-streamfunction surface flux 與 volume flux 長時間相位誤差累積。
+\end{enumerate}
+
+\section{Face-Flux Consistency Diagnostic}
+
+\subsection{比較對象}
+
+比較
+\[
+a_{\rm edge}
+=
+-\partial_s\psi
+\]
+與
+\[
+a_{\rm vol}
+=
+n_xF^x+n_yF^y.
+\]
+
+\subsection{結果}
+
+對 $\alpha_0=\pi/4$：
+\[
+\texttt{diff\_Linf}\approx1.5253\times10^{-1}
+\]
+幾乎不隨 refinement 下降。
+
+\[
+\texttt{diff\_L2}
+\sim h^{1/2}.
+\]
+
+同時：
+\[
+\texttt{edgePair}\approx10^{-13},
+\]
+但
+\[
+\texttt{volPair}\approx3.05\times10^{-1}.
+\]
+
+\subsection{解讀}
+
+\[
+\boxed{
+a_{\rm edge}\text{ 是 pairwise consistent，但 }a_{\rm vol}\text{ 的 one-sided traces 不形成 common flux。}
+}
+\]
+
+而 $a_{\rm edge}$ 與 $a_{\rm vol}$ 的 mismatch 有局部 $O(1)$ error，但 measure 很小，所以 weighted $L^2$ 呈 $h^{1/2}$ 下降。
+
+\subsection{Endpoint Diagnostic}
+
+Table1 face trace nodes 不含真正 endpoint，所以 exact endpoint mask 結果為 NaN。top error CSV 顯示最大誤差發生在：
+\[
+t_{\rm face}\approx0.04691
+\quad\text{或}\quad
+t_{\rm face}\approx0.95309.
+\]
+
+因此最大 mismatch 來自 \textbf{near-corner trace nodes}，不是真正 endpoint。
+
+\subsection{Corner Volavg 嘗試}
+
+嘗試在 near-corner face nodes 以 pairwise averaged volume trace 取代 edge speed：
+\[
+a_{\rm avg}
+=
+\frac12(a_{\rm vol}^-+a_{\rm vol}^{+,\text{owner}}).
+\]
+
+結果：
+\begin{itemize}
+  \item $L^\infty$ 略有改善。
+  \item $L^2$ 與 convergence rate 沒有改善。
+  \item $nsub=16$ 長時間 $L^2$ 仍約 $1.3\times10^{-4}$。
+\end{itemize}
+
+\subsection{判斷}
+
+\[
+\boxed{
+\text{簡單 corner volume-average blending 不是有效修法。}
+}
+\]
+
+\section{已接受與已拒絕方案}
+
+\subsection{已接受方案}
+
+\begin{longtable}{p{0.27\linewidth}p{0.35\linewidth}p{0.30\linewidth}}
+\toprule
+模組 & 採用方案 & 理由 \\
+\midrule
+\endhead
+球面到 flat mapping & Equal-area map & 保留面積權重簡潔性 \\
+velocity / area flux & Stream-function area flux & 避免 $A^{-1}$ 極點不唯一 \\
+seam closure & $(X,Y,Z)$ embedding pairing & 不使用 $\lambda,\theta$，穩定配對 \\
+surface lifting & Projected inverse mass & 符合 SDG / Table1 weighted projection \\
+face speed & Edge-streamfunction $a=-\partial_s\psi$ & 保守且 free-stream preserving \\
+numerical flux & Pairwise common flux & 強制 $\hat f^-+\hat f^+=0$ \\
+mass correction & Global correction & 保 mass，不破壞 constant state \\
+performance & Numba fast RHS & 數值一致且明顯加速 \\
+\bottomrule
+\end{longtable}
+
+\subsection{已拒絕方案}
+
+\begin{longtable}{p{0.38\linewidth}p{0.55\linewidth}}
+\toprule
+方案 & 拒絕原因 \\
+\midrule
+\endhead
+$A^{-1}$ velocity transform & $\alpha_0=\pi/4$ divergence 不穩定，極點方向不唯一 \\
+local-side flux assembly & \texttt{pairErr} 在 $\alpha_0\neq0$ 時為 $O(10^{-1})$ \\
+direct numerical flux surface & mass 守恆但破壞 constant-state preservation \\
+element-wise local correction & 對 constant field 產生非 roundoff correction \\
+corner\_volavg face-speed blending & 未改善長時間 $L^2$ rate \\
+\bottomrule
+\end{longtable}
+
+\section{本階段產生 / 使用的主要檔案}
+
+若尚未 commit，建議將以下檔案整理到 feature branch。
+
+\subsection{Operators}
+
+\begin{lstlisting}[style=repo]
+operators/sdg_projected_surface_flux.py
+operators/sdg_direct_flux_surface.py
+operators/sdg_sphere_seam_connectivity.py
+operators/sdg_edge_streamfunction_flux.py
+operators/sdg_edge_streamfunction_closed_sphere_rhs.py
+operators/sdg_edge_streamfunction_global_corrected_rhs.py
+operators/sdg_edge_streamfunction_fast_rhs.py
+operators/sdg_hybrid_face_speed.py
+\end{lstlisting}
+
+\subsection{Diagnostics / Demos}
+
+\begin{lstlisting}[style=repo]
+demo/demo_sdg_projected_surface_lifting_check.py
+demo/demo_sdg_boundary_flux_balance_check.py
+demo/demo_sdg_direct_flux_surface_balance_check.py
+demo/demo_sdg_sphere_seam_flux_balance_check.py
+demo/demo_sdg_edge_streamfunction_flux_check.py
+demo/demo_sdg_edge_closed_sphere_lsrk_mass_check.py
+demo/demo_sdg_edge_global_corrected_lsrk_mass_check.py
+demo/demo_sdg_edge_fast_rhs_benchmark.py
+demo/demo_sdg_edge_fast_lsrk_mass_check.py
+demo/demo_sdg_edge_fast_advection_convergence.py
+demo/demo_sdg_edge_fast_advection_convergence_cfl.py
+demo/demo_sdg_face_flux_consistency_check.py
+demo/demo_sdg_face_flux_endpoint_diagnostic.py
+demo/demo_sdg_edge_fast_advection_hybrid_speed_convergence.py
+demo/demo_sdg_edge_fast_advection_convergence_cfl_center.py
+\end{lstlisting}
+
+\section{目前最終候選演算法}
+
+\subsection{Precompute}
+
+\begin{enumerate}
+  \item 建立 equal-area sphere-flat geometry cache。
+  \item 建立 SDG Table1 differentiation operators。
+  \item 建立 streamfunction：
+  \[
+  \psi=-R\,\Omega\cdot X.
+  \]
+  \item 建立 area flux：
+  \[
+  F^x=-\psi_y,\qquad F^y=\psi_x.
+  \]
+  \item 建立 projected inverse mass：
+  \[
+  P=V(A V^TWV)^{-1}(A V^T).
+  \]
+  \item 用 $(X,Y,Z)$ 建立 sphere seam connectivity。
+  \item 建立 face edge derivative matrix。
+  \item 預先計算：
+  \[
+  a_{\rm edge}=-\partial_s\psi.
+  \]
+\end{enumerate}
+
+\subsection{RHS Evaluation}
+
+給定 $q$：
+
+\begin{enumerate}
+  \item Volume:
+  \[
+  R_{\rm vol}
+  =
+  -\frac{1}{J}
+  \left[
+  D_x(F^xq)+D_y(F^yq)
+  \right].
+  \]
+
+  \item Surface:
+  \begin{itemize}
+    \item pairwise common numerical flux；
+    \item penalty:
+    \[
+    p=f-\hat f;
+    \]
+    \item projected lifting:
+    \[
+    R_{\rm surf}
+    =
+    \frac{1}{J}
+    M^{-1}
+    \int_{\partial K}p\phi\,ds.
+    \]
+  \end{itemize}
+
+  \item Raw:
+  \[
+  R_{\rm raw}=R_{\rm vol}+R_{\rm surf}.
+  \]
+
+  \item Global correction:
+  \[
+  R
+  =
+  R_{\rm raw}
+  -
+  \frac{\int R_{\rm raw}\,dS}{\int1\,dS}.
+  \]
+\end{enumerate}
+
+\section{尚未解決問題與風險}
+
+\subsection{長時間 Accuracy 退化}
+
+目前最主要限制：
+\[
+\boxed{
+T=5\text{ long-time advection 約二階上下。}
+}
+\]
+
+這不影響 mass conservation 與 constant-state preservation，但會影響高階 accuracy claim。
+
+\subsection{Volume-Face Flux Mismatch}
+
+diagnostic 顯示
+\[
+a_{\rm edge}-a_{\rm vol}
+\]
+在 near-corner trace nodes 有 $O(1)$ mismatch。此 mismatch 可能長時間累積成 phase / amplitude error。
+
+\subsection{Equal-Area Map Regularity}
+
+octahedral equal-area map 在 patch corners 附近可能有限 regularity。即使 solution 本身在 sphere 上 smooth，映射到 flat patch 後可能在 corner / seam 結構下產生低 regularity 表現。
+
+\subsection{Global Correction 對 Accuracy 的影響}
+
+global correction magnitude 通常很小，但仍可能在長時間中對 phase / amplitude 有微弱累積效應。目前未觀察到它是主要問題，但需在報告中標示為限制。
+
+\section{後續建議}
+
+\subsection{短期：整理 Repo}
+
+建議建立 branch：
+\begin{lstlisting}[style=repo]
+feature/equal-area-edge-streamfunction-sdg
+\end{lstlisting}
+
+建議 commit 分組：
+\begin{lstlisting}[style=repo]
+1. add streamfunction area flux diagnostics
+2. add projected surface lifting
+3. add sphere seam connectivity
+4. add edge-streamfunction surface flux
+5. add global mass corrected RHS
+6. add numba fast RHS
+7. add convergence and face-flux diagnostics
+8. add closure report
+\end{lstlisting}
+
+\subsection{中期：Accuracy 改善方向}
+
+可嘗試：
+\begin{enumerate}
+  \item \textbf{face-volume consistency correction}：建立使 volume flux trace 與 edge flux trace 更一致的 split form。
+  \item \textbf{corner regularization}：對 near-corner trace nodes 設計更幾何一致的 face speed regularization，而不是簡單 volavg。
+  \item \textbf{corner-excluding benchmark}：建立不接近 octahedral vertices 的 manufactured solution / local-in-time benchmark，區分 scheme order 與 mapping singularity effect。
+  \item \textbf{multi-patch smoothness analysis}：分析 equal-area map 在 octahedron edge / vertex 的 differentiability class。
+  \item \textbf{energy / $L^2$ stability diagnostic}：目前只完整確認 mass 與 constant state，還需測 energy behavior。
+\end{enumerate}
+
+\subsection{長期：可寫成專題主軸}
+
+本階段已足以形成一個專題章節：
+
+\begin{quote}
+A mass-conservative and free-stream-preserving SDG discretization on an equal-area octahedral sphere map using stream-function based face fluxes.
+\end{quote}
+
+核心亮點：
+\begin{enumerate}
+  \item 避免 $A^{-1}$ pole ambiguity。
+  \item 保留 equal-area map。
+  \item seam pairing 使用 embedding coordinates。
+  \item pairwise flux 保 conservation。
+  \item edge-streamfunction face speed 保 free-stream。
+  \item Numba fast RHS 可做實驗。
+  \item 明確揭示 long-time accuracy 受 patch-corner regularity 限制。
+\end{enumerate}
+
+\section{最終摘要}
+
+本對話完成了從「$A^{-1}$ 極點奇異性與 $\alpha_0=\pi/4$ divergence 問題」到「可執行 fast SDG solver prototype」的完整排查與設計。
+
+最終候選版本不是原本的 $A^{-1}$-velocity formulation，也不是 direct flux surface formulation，而是：
+\[
+\boxed{
+\text{equal-area}
++
+\text{stream-function volume flux}
++
+\text{edge-streamfunction strong surface correction}
++
+\text{sphere seam pairing}
++
+\text{global mass correction}
++
+\text{Numba fast RHS}.
+}
+\]
+
+此版本已經在 conservation 與 free-stream preservation 上通過測試；短時間 accuracy 高階；長時間 advection 目前觀察到二階上下，推測與 equal-area octahedral patch corner / seam consistency 有關。
+
+因此，本階段可以結案為：
+\[
+\boxed{
+\text{已完成穩定、守恆、可加速的候選方案；下一階段應聚焦 long-time accuracy 與 corner regularity。}
+}
+\]
+
+\end{document}
