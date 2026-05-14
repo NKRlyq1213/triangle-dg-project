@@ -18,6 +18,7 @@ dist/
 *.egg-info/
 
 .ipynb_checkpoints/
+.pytest_local_tmp
 
 .DS_Store
 Thumbs.db
